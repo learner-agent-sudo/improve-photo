@@ -57,9 +57,20 @@ path that is wrong for a project subpath. The result is a page that loads and
 renders nothing: a white screen with no error. The site has to be built first,
 and only the Actions source does that.
 
-Once the source is set to GitHub Actions, every push to the default branch (or
-to `main`) rebuilds and republishes. Nothing to pay for, nothing else to sign up
-to. The URL does not change when you switch.
+Changing the setting does not itself republish, so afterwards either push
+again, or go to **Actions → Deploy to GitHub Pages → Run workflow**. From then
+on every push to the default branch (or to `main`) rebuilds and republishes.
+Nothing to pay for, nothing else to sign up to, and the URL does not change.
+
+While the source is still set to a branch, GitHub runs its own *legacy* Jekyll
+builder alongside this workflow. Both deploy, and the legacy one tends to finish
+last and win — so the unbuilt page keeps reappearing until the source is
+switched. Switching it stops the legacy builder entirely.
+
+If a deployment ever does go out unbuilt, the page now says so rather than
+showing a white screen: `index.html` carries a fallback notice that `main.tsx`
+removes as its first act, so it is only ever visible when the JavaScript did not
+run.
 
 If you later want a custom domain and faster global delivery, Cloudflare Pages
 or Netlify will both build this repository with zero configuration — the build

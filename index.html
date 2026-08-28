@@ -19,6 +19,56 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!--
+      Shown only when the app fails to start. main.tsx removes this as its first
+      act, so if you are reading it in a browser the JavaScript never ran.
+
+      The styles are inline on purpose: in the failure case the CSS bundle has
+      usually not loaded either, and a blank white page tells nobody anything.
+    -->
+    <div id="boot-fallback" role="alert">
+      <style>
+        #boot-fallback {
+          position: fixed;
+          inset: 0;
+          display: grid;
+          place-items: center;
+          padding: 24px;
+          background: #0f0e0c;
+          color: #cdc4b8;
+          font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, sans-serif;
+          text-align: center;
+        }
+        #boot-fallback div { max-width: 46ch; }
+        #boot-fallback h1 {
+          margin: 0 0 12px;
+          font-size: 21px;
+          font-weight: 600;
+          color: #f4efe6;
+        }
+        #boot-fallback p { margin: 0 0 12px; }
+        #boot-fallback code {
+          font-family: ui-monospace, Menlo, monospace;
+          font-size: 13px;
+          color: #f2a03d;
+        }
+        #boot-fallback small { color: #6b635b; font-size: 12.5px; }
+      </style>
+      <div>
+        <h1>Darkroom didn&rsquo;t start</h1>
+        <p>The page loaded, but its code did not run.</p>
+        <p>
+          If this is a GitHub&nbsp;Pages address, the site is being served
+          <em>unbuilt</em>. Fix it in the repository under
+          <code>Settings &rarr; Pages</code>: set <b>Source</b> to
+          <b>GitHub&nbsp;Actions</b> rather than &ldquo;Deploy from a
+          branch&rdquo;, then push once more.
+        </p>
+        <p><small>Otherwise, check that JavaScript is enabled and reload.</small></p>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
