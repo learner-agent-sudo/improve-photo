@@ -9,6 +9,20 @@ import { Toasts, type Toast } from './components/Toasts'
 import { AiSettingsDialog } from './components/AiSettingsDialog'
 import { loadAiSettings, saveAiSettings } from './ai/settings'
 import type { AiSettings, ProposedChange } from './ai/types'
+import { CollageStage } from './components/CollageStage'
+import { CollagePanel } from './components/CollagePanel'
+import { CollageTray } from './components/CollageTray'
+import { CollageExportPanel, collageSize, type CollageExportConfig } from './components/CollageExportPanel'
+import {
+  aspectValue,
+  autoLayout,
+  createCollage,
+  resolveCells,
+  EMPTY_SLOT,
+  type CollageDoc,
+  type TextLayer,
+} from './engine/collage'
+import { exportCollage, type CollageSource } from './engine/collageRender'
 import { Exporter, saveBlob } from './engine/export'
 import { aspectRatio, centredCrop, framedSize } from './engine/geometry'
 import { applyPreset, PRESETS } from './engine/presets'
@@ -42,6 +56,25 @@ export default function App() {
   const [tool, setTool] = useState<Tool>('adjust')
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings())
   const [aiDialog, setAiDialog] = useState(false)
+
+  const [mode, setMode] = useState<'enhance' | 'collage'>('enhance')
+  const [collage, setCollage] = useState<CollageDoc | null>(null)
+  const [selectedCell, setSelectedCell] = useState<number | null>(0)
+  const [selectedText, setSelectedText] = useState<string | null>(null)
+  const [collageExport, setCollageExport] = useState<CollageExportConfig>({
+    longEdge: 1440,
+    format: 'jpeg',
+    quality: 0.92,
+  })
+  const collageRef = useRef<CollageDoc | null>(collage)
+  collageRef.current = collage
+  const collageHist = useRef<HistoryEntry & { docs: CollageDoc[] }>({
+    past: [],
+    future: [],
+    lastKey: '',
+    lastAt: 0,
+    docs: [],
+  })
   const [toasts, setToasts] = useState<Toast[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   const [config, setConfig] = useState<ExportConfig>({
@@ -134,6 +167,20 @@ export default function App() {
     },
     [selectedId],
   )
+
+  const stepCollage = useCallback((dir: 'undo' | 'redo') => {
+    const cur = collageRef.current
+    const h = collageHist.current
+    if (!cur) return
+    const from = dir === 'undo' ? h.docs : (h.future as unknown as CollageDoc[])
+    const to = dir === 'undo' ? (h.future as unknown as CollageDoc[]) : h.docs
+    if (from.length === 0) return
+    to.push(cur)
+    const restored = from.pop()!
+    h.lastKey = ''
+    collageRef.current = restored
+    setCollage(restored)
+  }, [])
 
   const hist = selectedId ? history.current.get(selectedId) : undefined
   const canUndo = (hist?.past.length ?? 0) > 0
@@ -346,7 +393,9 @@ export default function App() {
 
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault()
-        step(e.shiftKey ? 'redo' : 'undo')
+        const dir = e.shiftKey ? 'redo' : 'undo'
+        if (mode === 'collage') stepCollage(dir)
+        else step(dir)
         return
       }
       if (typing || e.metaKey || e.ctrlKey) return
@@ -360,7 +409,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedId, step])
+  }, [selectedId, step, stepCollage, mode])
 
   const updateAiSettings = useCallback((patch: Partial<AiSettings>) => {
     setAiSettings((prev) => {
@@ -395,6 +444,189 @@ export default function App() {
     [patchEdit, selectedId, notify],
   )
 
+  // --- collage --------------------------------------------------------------
+  const sources = useMemo(() => {
+    const m = new Map<string, CollageSource>()
+    for (const p of photos) {
+      m.set(p.id, {
+        id: p.id,
+        preview: p.preview,
+        edit: p.edit,
+        seed: p.seed,
+        nativeWidth: p.nativeWidth,
+        nativeHeight: p.nativeHeight,
+      })
+    }
+    return m
+  }, [photos])
+
+  /** Every collage edit goes through here, so undo covers the collage too. */
+  const patchCollage = useCallback((patch: Partial<CollageDoc>, key = '') => {
+    const prev = collageRef.current
+    if (!prev) return
+    const next = { ...prev, ...patch }
+    const h = collageHist.current
+    const now = Date.now()
+    if (!(h.lastKey === key && now - h.lastAt < COALESCE_MS && h.docs.length > 0)) {
+      h.docs.push(prev)
+      if (h.docs.length > HISTORY_LIMIT) h.docs.shift()
+    }
+    h.lastKey = key
+    h.lastAt = now
+    h.future = []
+    collageRef.current = next
+    setCollage(next)
+  }, [])
+
+  const onCollageDoc = useCallback(
+    (patch: Partial<CollageDoc>, key?: string) => {
+      // A generated arrangement has to be recomputed when the canvas changes
+      // shape, otherwise the cells keep the proportions of the old one.
+      if (patch.aspect && collageRef.current?.layoutId === 'auto') {
+        const cells = autoLayout(collageRef.current.cells.length, aspectValue(patch.aspect))
+        const slots = cells.map((_, i) => collageRef.current!.slots[i] ?? { ...EMPTY_SLOT })
+        patchCollage({ ...patch, cells, slots }, key)
+        return
+      }
+      patchCollage(patch, key)
+    },
+    [patchCollage],
+  )
+
+  const chooseLayout = useCallback(
+    (layoutId: string) => {
+      const prev = collageRef.current
+      if (!prev) return
+      const cells = resolveCells(layoutId, Math.max(photosRef.current.length, 1), prev.aspect)
+      // Carry the photos across in the order they were placed, so changing
+      // arrangement rearranges rather than empties.
+      const placed = prev.slots.filter((s) => s.photoId)
+      const slots = cells.map((_, i) => (placed[i] ? { ...placed[i] } : { ...EMPTY_SLOT }))
+      patchCollage({ layoutId, cells, slots }, 'layout')
+      setSelectedCell(0)
+    },
+    [patchCollage],
+  )
+
+  const autoFill = useCallback(() => {
+    const prev = collageRef.current
+    if (!prev) return
+    const list = photosRef.current
+    patchCollage(
+      {
+        slots: prev.cells.map((_, i) =>
+          list[i] ? { photoId: list[i].id, zoom: 1, offsetX: 0, offsetY: 0 } : { ...EMPTY_SLOT },
+        ),
+      },
+      'fill',
+    )
+  }, [patchCollage])
+
+  const shuffleCollage = useCallback(() => {
+    const prev = collageRef.current
+    if (!prev) return
+    const ids = prev.slots.filter((s) => s.photoId).map((s) => s.photoId!)
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[ids[i], ids[j]] = [ids[j], ids[i]]
+    }
+    let k = 0
+    patchCollage(
+      {
+        slots: prev.slots.map((s) =>
+          s.photoId ? { ...s, photoId: ids[k++], offsetX: 0, offsetY: 0 } : s,
+        ),
+      },
+      'shuffle',
+    )
+  }, [patchCollage])
+
+  const placeInFrame = useCallback(
+    (photoId: string) => {
+      const prev = collageRef.current
+      if (!prev) return
+      const target =
+        selectedCell !== null && selectedCell < prev.slots.length
+          ? selectedCell
+          : prev.slots.findIndex((s) => !s.photoId)
+      if (target < 0) {
+        notify('info', 'Every frame is full. Select one to replace it.')
+        return
+      }
+      patchCollage(
+        {
+          slots: prev.slots.map((s, i) =>
+            i === target ? { photoId, zoom: 1, offsetX: 0, offsetY: 0 } : s,
+          ),
+        },
+        'fill',
+      )
+      const nextEmpty = prev.slots.findIndex((s, i) => i > target && !s.photoId)
+      setSelectedCell(nextEmpty >= 0 ? nextEmpty : target)
+    },
+    [selectedCell, patchCollage, notify],
+  )
+
+  const addText = useCallback(() => {
+    const prev = collageRef.current
+    if (!prev) return
+    const layer: TextLayer = {
+      id: `t${Date.now().toString(36)}`,
+      text: 'Tap to edit',
+      x: 0.5,
+      y: 0.88,
+      size: 0.07,
+      color: '#ffffff',
+      font: 'display',
+      weight: 600,
+      align: 'center',
+      rotation: 0,
+      shadow: true,
+    }
+    patchCollage({ texts: [...prev.texts, layer] }, 'text:add')
+    setSelectedText(layer.id)
+    setSelectedCell(null)
+  }, [patchCollage])
+
+  const runCollageExport = useCallback(async () => {
+    const doc = collageRef.current
+    if (!doc) return
+    const [w, h] = collageSize(doc, collageExport.longEdge)
+    setBusy('Rendering the collage…')
+    try {
+      const blob = await exportCollage(
+        doc,
+        sources,
+        w,
+        h,
+        collageExport.format,
+        collageExport.quality,
+      )
+      const ext = collageExport.format === 'jpeg' ? 'jpg' : collageExport.format
+      saveBlob(blob, `collage-${w}x${h}.${ext}`)
+      notify('ok', `Exported ${w} × ${h}.`)
+    } catch (err) {
+      notify('error', `Collage export failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(null)
+    }
+  }, [collageExport, sources, notify])
+
+  const enterCollage = useCallback(() => {
+    if (!collageRef.current) {
+      const doc = createCollage(Math.max(photosRef.current.length, 2))
+      doc.slots = doc.cells.map((_, i) =>
+        photosRef.current[i]
+          ? { photoId: photosRef.current[i].id, zoom: 1, offsetX: 0, offsetY: 0 }
+          : { ...EMPTY_SLOT },
+      )
+      collageRef.current = doc
+      setCollage(doc)
+      setSelectedCell(0)
+    }
+    setMode('collage')
+  }, [])
+
   const selectPhoto = useCallback((id: string) => {
     setSelectedId(id)
     setTool('adjust')
@@ -406,10 +638,31 @@ export default function App() {
         <div className="wordmark">
           <span className="lens" />
           <h1>Darkroom</h1>
-          <small>Stage 1 · single photo</small>
+          <small>{mode === 'collage' ? 'Stage 2 · collage' : 'Stage 1 · single photo'}</small>
         </div>
 
-        {selected && (
+        {photos.length > 0 && (
+          <div className="mode-switch" role="tablist" aria-label="Mode">
+            <button
+              role="tab"
+              className="mode-btn"
+              aria-selected={mode === 'enhance'}
+              onClick={() => setMode('enhance')}
+            >
+              Enhance
+            </button>
+            <button
+              role="tab"
+              className="mode-btn"
+              aria-selected={mode === 'collage'}
+              onClick={enterCollage}
+            >
+              Collage
+            </button>
+          </div>
+        )}
+
+        {selected && mode === 'enhance' && (
           <div className="chip-row">
             <button
               className="chip"
@@ -439,16 +692,20 @@ export default function App() {
           <div className="undo-pair">
             <button
               className="btn btn-sm"
-              onClick={() => step('undo')}
-              disabled={!canUndo}
+              onClick={() => (mode === 'collage' ? stepCollage('undo') : step('undo'))}
+              disabled={mode === 'collage' ? collageHist.current.docs.length === 0 : !canUndo}
               title="Undo  (Ctrl/Cmd + Z)"
             >
               ↶
             </button>
             <button
               className="btn btn-sm"
-              onClick={() => step('redo')}
-              disabled={!canRedo}
+              onClick={() => (mode === 'collage' ? stepCollage('redo') : step('redo'))}
+              disabled={
+                mode === 'collage'
+                  ? (collageHist.current.future as unknown[]).length === 0
+                  : !canRedo
+              }
               title="Redo  (Ctrl/Cmd + Shift + Z)"
             >
               ↷
@@ -456,7 +713,7 @@ export default function App() {
           </div>
         )}
 
-        {photos.length > 1 && (
+        {photos.length > 1 && mode === 'enhance' && (
           <button
             className="btn btn-sm"
             onClick={applyToAll}
@@ -472,6 +729,57 @@ export default function App() {
       {photos.length === 0 || !selected ? (
         <div className="workspace">
           <Hero onFiles={addFiles} />
+        </div>
+      ) : mode === 'collage' && collage ? (
+        <div className="workspace">
+          <CollageTray
+            photos={photos}
+            used={new Set(collage.slots.map((s) => s.photoId).filter(Boolean) as string[])}
+            onPlace={placeInFrame}
+            onFiles={addFiles}
+            hasSelection={selectedCell !== null}
+          />
+          <CollageStage
+            doc={collage}
+            sources={sources}
+            selectedCell={selectedCell}
+            selectedText={selectedText}
+            onDoc={onCollageDoc}
+            onSelectCell={setSelectedCell}
+            onSelectText={setSelectedText}
+            onError={reportError}
+          />
+          <CollagePanel
+            doc={collage}
+            photoCount={photos.length}
+            selectedCell={selectedCell}
+            selectedText={selectedText}
+            onDoc={onCollageDoc}
+            onLayout={chooseLayout}
+            onSelectText={setSelectedText}
+            onAutoFill={autoFill}
+            onShuffle={shuffleCollage}
+            onClearAll={() =>
+              onCollageDoc({ slots: collage.cells.map(() => ({ ...EMPTY_SLOT })) }, 'clear')
+            }
+            onClearCell={(i) =>
+              onCollageDoc(
+                { slots: collage.slots.map((sl, k) => (k === i ? { ...EMPTY_SLOT } : sl)) },
+                'clear',
+              )
+            }
+            onAddText={addText}
+            footer={
+              <CollageExportPanel
+                doc={collage}
+                config={collageExport}
+                onChange={(patch) => setCollageExport((c) => ({ ...c, ...patch }))}
+                onExport={runCollageExport}
+                busy={busy !== null}
+                filled={collage.slots.filter((sl) => sl.photoId).length}
+              />
+            }
+          />
         </div>
       ) : (
         <div className="workspace">

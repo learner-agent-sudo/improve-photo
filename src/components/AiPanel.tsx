@@ -52,6 +52,7 @@ export function AiPanel({
   const [proposal, setProposal] = useState<AiProposal | null>(null)
   const [error, setError] = useState<{ message: string; hint?: string } | null>(null)
   const [skipped, setSkipped] = useState<Set<ProposableKey>>(new Set())
+  const [retry, setRetry] = useState<string | null>(null)
   const [takeStraighten, setTakeStraighten] = useState(true)
   const abort = useRef<AbortController | null>(null)
 
@@ -61,6 +62,7 @@ export function AiPanel({
     setError(null)
     setProposal(null)
     setBusy(true)
+    setRetry(null)
     abort.current?.abort()
     const ac = new AbortController()
     abort.current = ac
@@ -71,6 +73,8 @@ export function AiPanel({
         photo.analysis,
         photo.edit.adjustments,
         ac.signal,
+        (n, total, wait) =>
+          setRetry(`Gemini is busy — retrying (${n} of ${total}) in ${Math.round(wait / 1000)}s`),
       )
       setProposal(result)
       setSkipped(new Set())
@@ -81,6 +85,7 @@ export function AiPanel({
       setError({ message: e.message || 'The review failed.', hint: e.hint })
     } finally {
       setBusy(false)
+      setRetry(null)
     }
   }, [settings, photo])
 
@@ -122,6 +127,8 @@ export function AiPanel({
           ⚙
         </button>
       </div>
+
+      {retry && <p className="ai-hint retrying">{retry}</p>}
 
       {!ready && (
         <p className="ai-hint">

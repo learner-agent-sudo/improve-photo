@@ -5,9 +5,11 @@ product shoot; Darkroom measures each one, corrects what is actually wrong with
 it, and exports at the exact size Xiaohongshu, Instagram or your own website
 expects.
 
-**Stage 1 (this repository, working today): improve a single photo.**
-Stage 2 is the collage builder — combining nine dish photos into one or two
-posts. The design for it is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Two modes, switched in the top bar:
+
+- **Enhance** — fix one photo, then export it at the size a platform wants.
+- **Collage** — arrange several photos into one composed image, add text, export
+  that.
 
 ---
 
@@ -174,6 +176,43 @@ free tier this is free but rate-limited to a handful of requests a minute; on a
 paid key it is a fraction of a cent per photo. Reviewing nine dishes is nine
 requests.
 
+## Collage
+
+Switch to **Collage** in the top bar. Every photo keeps the edit you gave it in
+Enhance — exposure, colour, perspective, rotation — so a tile looks exactly the
+way that photo looked on its own.
+
+**Arrangements.** Twenty-odd hand-drawn layouts from one frame up to twelve,
+sorted so the ones that fit your photo count come first: two-up, one big and
+two, three by three, a wide banner over a row of four, and so on. **Auto**
+generates an arrangement for any number by splitting the canvas recursively,
+always cutting the longer way, which keeps the frames close to square whatever
+shape the canvas is.
+
+**Canvas shape** is the same set of ratios as the export targets — 3:4 for
+Xiaohongshu, 4:5 for Instagram, 1:1, 9:16, 4:3, 16:9.
+
+**Filling frames**, whichever suits you:
+
+- drag a photo from the roll onto a frame
+- click a frame, then click a photo
+- **Fill in order** does the lot, **Shuffle** rearranges
+
+**Adjusting a tile:** drag inside it to reposition the photo within its frame,
+scroll to zoom in. Drag *out* of a tile and onto another and the two swap
+places — the pan you started is rolled back, so it never leaves a half-move
+behind.
+
+**Style:** the gap between photos, the border around the whole thing, corner
+rounding, and any background colour.
+
+**Text:** add as many layers as you like. Drag them anywhere on the canvas.
+Serif, sans or mono; six colours or your own; size, weight, alignment, rotation,
+and a drop shadow for light text over a busy photo. Fonts are waited on before
+export, so what you download matches what you saw.
+
+Undo covers all of it. Export writes the same sizes as the single-photo mode.
+
 ## Framing: crop, straighten, and fixing the angle
 
 Three tools share the stage, switched with the pill above the image or with the
@@ -322,6 +361,8 @@ src/
     types.ts       the proposal shape, and which sliders the model may touch
     gemini.ts      request building, and hard validation of whatever comes back
     settings.ts    local-only configuration
+    collage.ts     stage 2: layouts, the auto-split generator, per-tile framing
+    collageRender.ts  composites tiles, background, gutters and text onto one canvas
   state/
     photos.ts      loading, memory strategy, re-decoding for export
   components/      the interface

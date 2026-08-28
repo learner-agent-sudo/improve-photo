@@ -274,12 +274,37 @@ async function readError(res: Response): Promise<string> {
   }
 }
 
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    const t = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(t)
+        reject(new DOMException('Aborted', 'AbortError'))
+      },
+      { once: true },
+    )
+  })
+
+/**
+ * "The model is busy" is Google's problem, not yours, and it passes.
+ *
+ * 503 means the model is overloaded and 429 means the free tier's
+ * requests-per-minute cap was hit; both clear on their own. Retrying with a
+ * widening gap turns a dead end into a short wait. Anything else - a bad key, a
+ * retired model name - will never fix itself, so it is reported immediately.
+ */
+const RETRY_STATUS = new Set([429, 500, 502, 503, 504])
+const RETRY_DELAYS_MS = [1200, 3000, 7000]
+
 export async function requestReview(
   settings: AiSettings,
   bitmap: ImageBitmap,
   analysis: Analysis,
   current: Adjustments,
   signal?: AbortSignal,
+  onRetry?: (attempt: number, total: number, waitMs: number) => void,
 ): Promise<AiProposal> {
   const model = settings.model.trim()
   if (!model) throw new AiError('No model is set.', 'Add one in AI settings.')
@@ -287,6 +312,39 @@ export async function requestReview(
   const imageB64 = await encodeForReview(bitmap)
   const envelope = buildBody(model, imageB64, analysis, current)
 
+  for (let attempt = 0; ; attempt++) {
+    const res = await send(settings, model, envelope, signal)
+    if (res.ok) return validateProposal(extractJson(await res.json()))
+
+    const message = await readError(res)
+    if (RETRY_STATUS.has(res.status) && attempt < RETRY_DELAYS_MS.length) {
+      const wait = RETRY_DELAYS_MS[attempt]
+      onRetry?.(attempt + 1, RETRY_DELAYS_MS.length, wait)
+      await sleep(wait, signal)
+      continue
+    }
+
+    const hint =
+      res.status === 503 || res.status >= 500
+        ? 'Gemini is overloaded right now. It was retried a few times; leave it a minute and ask again.'
+        : res.status === 429
+          ? 'That is the rate limit. The free tier allows only a few requests a minute.'
+          : res.status === 400 || res.status === 404
+            ? `Check the model name (${model}) and the API key.`
+            : res.status === 403
+              ? 'The key was rejected. Check it is enabled for the Gemini API.'
+              : undefined
+    throw new AiError(message, hint)
+  }
+}
+
+/** One attempt, over whichever transport is configured. */
+async function send(
+  settings: AiSettings,
+  model: string,
+  envelope: ReturnType<typeof buildBody>,
+  signal?: AbortSignal,
+): Promise<Response> {
   let res: Response
   if (settings.transport === 'proxy') {
     const url = settings.proxyUrl.trim()
@@ -336,18 +394,5 @@ export async function requestReview(
     }
   }
 
-  if (!res.ok) {
-    const message = await readError(res)
-    const hint =
-      res.status === 429
-        ? 'That is the rate limit. The free tier allows only a few requests a minute.'
-        : res.status === 400 || res.status === 404
-          ? `Check the model name (${model}) and the API key.`
-          : res.status === 403
-            ? 'The key was rejected. Check it is enabled for the Gemini API.'
-            : undefined
-    throw new AiError(message, hint)
-  }
-
-  return validateProposal(extractJson(await res.json()))
+  return res
 }

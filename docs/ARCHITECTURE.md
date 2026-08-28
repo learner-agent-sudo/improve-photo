@@ -300,114 +300,73 @@ and says plainly what it costs you.
 
 ## Stage 2: the collage builder
 
-The goal: take the nine dish photos from one meal and compose them into one or
-two images, instead of posting nine.
+Built. The goal was to take the nine dish photos from one meal and compose them
+into one image instead of posting nine.
 
-### Why it is a small addition
+### It cost almost no new image processing
 
 Because the engine already renders any `Edit` into any output rectangle of any
-aspect, a collage is *the same pipeline run N times into sub-rectangles of one
-larger canvas*. Each cell of the grid simply becomes that tile's target aspect,
-and the existing crop maths fills it correctly. No new image processing is
-needed at all.
+aspect, a collage tile is *the same pipeline run again* — same photo, same
+colour edit, same perspective correction, only cropped to the shape of its cell
+and rendered at that cell's pixel size. `slotEdit()` is the whole adapter: it
+takes the largest rectangle of the cell's aspect that fits the photo's framed
+size, then narrows it by that tile's own zoom and pan.
 
-### Data model
+Nothing in `matrix.ts`, `geometry.ts`, `shaders.ts` or `renderer.ts` changed.
+That was the point of drawing the boundary where it was — and it means a photo
+that was perspective-corrected on its own arrives in a tile already corrected.
 
-```ts
-/** One photo placed in one cell, with framing on top of that photo's own edit. */
-interface CollageSlot {
-  photoId: string
-  zoom: number
-  offsetX: number
-  offsetY: number
-}
+### Compositing in 2D, not WebGL
 
-/** Cells are normalised: x, y, w, h in 0..1 of the canvas. */
-interface CollageLayout {
-  id: string
-  name: string
-  cells: { x: number; y: number; w: number; h: number }[]
-}
+Each tile is rendered through WebGL at exactly its final pixel size, then
+blitted 1:1 onto a 2D canvas that carries the background, gutters, rounded
+corners and text.
 
-interface Collage {
-  layoutId: string
-  slots: (CollageSlot | null)[]
-  canvasAspect: AspectKey      // reuses stage 1's crop ratios, 'free' included
-  longEdge: number             // reuses stage 1's export targets
-  gutter: number               // gap between cells, % of the canvas short edge
-  padding: number              // outer margin
-  radius: number               // corner rounding
-  background: { kind: 'colour'; value: string } | { kind: 'blur'; photoId: string }
-  caption?: { text: string; position: 'top' | 'bottom'; size: number }
-}
-```
+Doing the composite in WebGL would have meant scissored viewports, a
+y-axis flip to reason about per tile, and rounded corners and text as shader
+work. In 2D they are three lines each, and the quality is identical because
+every tile is already at its final resolution — `drawImage` at 1:1 resamples
+nothing.
 
-Note what is *not* here: no copy of the photo, no duplicated adjustments. A
-collage references photos by id, and each photo keeps the single `Edit` it
-already has. Change a photo's exposure and every collage it appears in updates.
+Tiles are cached, keyed by a revision number taken from object identity. The app
+replaces a `Photo` object whenever its edit changes, so a changed photo misses
+the cache and an unchanged one hits it, with no deep comparison and no stale
+tiles. Dragging a text layer therefore redraws at full speed without
+re-rendering a single photo.
 
 ### Layouts
 
-A hand-authored library keyed by photo count, because a good arrangement for
-nine dishes is a design decision, not something a generic algorithm gets right:
+Twenty-odd arrangements are drawn by hand, from one frame to twelve, because a
+good grid for nine dishes is a design decision rather than something a generic
+algorithm arrives at. `layoutsFor(n)` sorts them so exact fits come first.
 
-| Photos | Layouts worth having |
-| --- | --- |
-| 2 | side by side, stacked, 2:1 hero |
-| 3 | one large + two small, three-strip, T |
-| 4 | 2×2, one hero + three |
-| 5 | hero + four, 2 over 3 |
-| 6 | 2×3, 3×2, hero + five |
-| 9 | 3×3 — the classic Xiaohongshu grid |
+For counts the library does not cover, `autoLayout()` splits the canvas
+recursively, halving the count each time and cutting whichever way the current
+rectangle is longer *in real proportions* — the canvas aspect is folded into
+that test, so the same code gives sensible frames on a 3:4 post and on a 16:9
+banner.
 
-Plus one generator for arbitrary counts: recursive binary splitting of the
-canvas, choosing each split's direction and position from the aspect ratios of
-the photos going into each half. That is how the automatic collages in Google
-Photos and Apple Photos work, and it degrades gracefully to 7, 8, 11 photos.
+### Spacing that behaves
 
-### Rendering
+Gutter, padding and radius are fractions of the canvas short edge, so a layout
+looks the same at 1080 px and at 2048 px. `cellRects()` expands the working area
+by half a gutter before inserting each cell by half a gutter, which makes the
+outermost edges land exactly on the padding instead of at padding plus half a
+gap — the small detail that otherwise makes a collage look subtly misaligned.
 
-One WebGL context. For each slot, set the viewport to that cell's pixel
-rectangle inside the output framebuffer and run the existing composite pass with
-that cell's aspect as the target. Then one final pass paints gutters, padding,
-rounded corners, background and caption.
+### Text
 
-Two consequences worth stating: the tiles are rendered at final output
-resolution rather than scaled up from thumbnails, and a photo looks *exactly*
-the same inside a collage as it does on its own, because it is the same code.
+Layers carry position and size as fractions of the canvas, so they scale with
+the export rather than drifting. Export awaits `document.fonts.ready` first: an
+export that raced the web-font load would silently fall back to a system serif
+and not match the screen.
 
-### Interactions
+### What is deliberately not there
 
-- Drag a photo from the filmstrip into a cell.
-- Drag between cells to swap.
-- Drag inside a cell to reposition that photo within its frame.
-- Shuffle, to re-run the assignment.
-- A layout picker showing only layouts that fit the current photo count.
-
-### Files this would add
-
-```
-src/engine/collage.ts         layout types, the recursive-split generator
-src/engine/layouts.ts         hand-authored presets by count
-src/engine/collageRender.ts   N tiles into one canvas, gutters, background
-src/components/CollageStage.tsx
-src/components/LayoutPicker.tsx
-src/App.tsx                   a mode switch: Enhance | Combine
-```
-
-Nothing in `src/engine/matrix.ts`, `renderer.ts`, `geometry.ts` or `shaders.ts`
-needs to change. That was the point of drawing the boundary where it is — and
-it now also means a photo that was perspective-corrected on its own arrives in a
-collage tile already corrected, for free.
-
-### Honest estimate
-
-The rendering is the easy part — a day. The layout library and the drag
-interactions are the bulk of the work, and the fiddly part is making the drag
-behaviour feel right on a touchscreen. Budget the majority of the effort there,
-not on the image processing.
-
----
+- **Stickers, frames and filters on top of the collage.** Stage 1 already
+  handles the photography; decoration is a different product.
+- **Free-floating photos.** Every photo lives in a frame. It keeps the result
+  tidy and the interaction unambiguous, which is what the meal-grid case wants.
 
 ## Sources
 
