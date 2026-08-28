@@ -76,12 +76,53 @@ decided and undo any single part of it.
 
 Then you have manual control over exposure, contrast, highlights, shadows,
 whites, blacks, temperature, tint, vibrance, saturation, clarity, sharpening,
-noise reduction, vignette and grain, plus rotate, mirror, straighten, eight crop
-ratios, zoom and pan.
+noise reduction, vignette and grain.
 
 Seven presets sit on top of Auto rather than replacing it — Auto fixes what is
 objectively wrong with the file, the preset applies the taste. So *Dish* behaves
 sensibly whether the shot was taken in daylight or under restaurant tungsten.
+
+## Framing: crop, straighten, and fixing the angle
+
+Three tools share the stage, switched with the pill above the image or with the
+keyboard.
+
+**Crop** (`C`) draws the whole frame with a rectangle over it. Drag the edges,
+the corners, or the middle. Nine shapes are available including **Free**, and
+whichever you pick becomes the constraint while you drag. A thirds grid is
+always on, and the live pixel size is shown under the box.
+
+**Straighten** is a slider in the Frame panel, ±20°. The box stays square to the
+screen and the photo tilts underneath it, so it feels like levelling a horizon
+rather than rotating a picture. As in every editor, straightening eats a sliver
+of the edges: the crop shrinks automatically rather than showing empty wedges.
+
+**Perspective** (`P`) is the answer to "the photo was taken at an angle — can it
+be made straight-on?" Yes. Drag the four corners onto something in the photo
+that is *really* a rectangle:
+
+- the rim of a plate seen from across the table
+- the edge of a table or a tray
+- a menu, a sign, a book cover, a painting on a wall
+
+The engine maps that quadrilateral back to a rectangle, which flattens the whole
+photo with it. A magnifier follows the handle you are dragging, because your own
+cursor otherwise covers exactly the pixels you are aiming at. Arrow keys nudge a
+selected corner; Shift makes them coarser.
+
+While the tool is open the photo is shown **uncorrected** — otherwise the
+handles would chase the correction they are creating. Press *Done* to see the
+result.
+
+For a gentle lean rather than a genuine off-axis shot, the **Vertical** and
+**Horizontal** sliders in the Frame panel are quicker. They and the corner
+handles are the same mechanism underneath, so they compose.
+
+One honest limit: flattening a quadrilateral cannot recover the rectangle's true
+proportions without knowing the camera's focal length, which a JPEG may not
+carry. Darkroom takes the mean of the opposite edge lengths, which is close for
+the angles people actually shoot at. If the result looks slightly stretched, set
+the crop shape you actually want afterwards.
 
 ### Working on a whole meal
 
@@ -117,11 +158,21 @@ publicly. If you need the metadata kept, this tool is the wrong one.
 
 | | |
 | --- | --- |
+| `A` / `Esc` | Adjust tool |
+| `C` | Crop tool |
+| `P` | Perspective tool |
+| `\` | Toggle the before/after wipe |
+| `Ctrl`/`Cmd` + `Z` | Undo |
+| `Ctrl`/`Cmd` + `Shift` + `Z` | Redo |
 | `↑` / `↓` | Previous / next photo |
 | `Ctrl`/`Cmd` + `V` | Paste an image from the clipboard |
+| Arrow keys | Nudge a focused perspective corner (`Shift` for bigger steps) |
 | Double-click a slider | Reset that one control |
 | Drag on the image | Reposition the crop, when the crop is tighter than the frame |
 | Drag the divider | Move the before/after wipe |
+
+Undo is per photo and coalesces a slider drag into a single step, so one press
+undoes the whole gesture rather than one pixel of travel.
 
 ---
 
@@ -145,9 +196,6 @@ These are real and worth knowing before you rely on the tool.
 - **Very large files.** Exports are capped at 8192 px on the long edge and 40
   megapixels, because browsers cap canvas sizes and exceeding them fails
   silently rather than loudly.
-- **No undo history yet.** Double-click resets one slider, *Reset framing*
-  resets the crop, and the *Original* preset returns the whole photo to
-  untouched. A proper undo stack is on the list.
 
 ## A note on photos taken from the internet
 
@@ -172,7 +220,8 @@ src/
     analysis.ts    histogram, percentiles, grey-world means, Immerkaer noise estimate
     auto.ts        turns an Analysis into slider values
     presets.ts     the taste layer that sits on top of Auto
-    geometry.ts    crop/rotate/straighten as one output-UV -> source-UV matrix
+    matrix.ts      3x3 maths, including the unit-square-to-quad homography
+    geometry.ts    perspective, crop, rotate and straighten as one matrix
     shaders.ts     GLSL for the four passes
     renderer.ts    WebGL2 pipeline
     targets.ts     export sizes per platform

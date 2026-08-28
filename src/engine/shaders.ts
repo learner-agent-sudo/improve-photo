@@ -11,15 +11,25 @@
  */
 
 /**
- * Shared vertex shader. The V coordinate is flipped here rather than at upload
- * time so that WebGL's y-up clip space lands the right way round both on
- * screen and in `toBlob`/`readPixels` output.
+ * Shared vertex shader.
+ *
+ * No V flip here, and that is deliberate. Clip space is y-up, and the two kinds
+ * of render target disagree about what that means: for a texture attached to a
+ * framebuffer, NDC y = -1 is row V = 0, but for the default framebuffer the
+ * browser presents NDC y = +1 at the *top* of the HTML canvas. Flipping in the
+ * vertex shader would therefore correct the screen while silently inverting
+ * every intermediate texture, so the denoised copy would come back upside down
+ * relative to the source.
+ *
+ * Instead every pass shares one orientation - V = 0 is the first uploaded row,
+ * the top of the photo - and only the final composite flips, once, when it
+ * converts vUv into the output coordinate it hands to the transform.
  */
 export const VERT = `#version 300 es
 in vec2 aPos;
 out vec2 vUv;
 void main() {
-  vUv = vec2(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5);
+  vUv = aPos * 0.5 + 0.5;
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 `
@@ -114,10 +124,12 @@ void main() {
 /**
  * Pass 4 - geometry, tone, colour, detail and finish.
  *
- * `uXf` maps output UV to source UV, so crop / rotate / straighten cost
- * nothing extra and the export is pixel-identical to the preview.
- * `uLod` is the mip level that matches the export downscale, which keeps
- * 12 MP phone files from aliasing when they land on a 1440 px canvas.
+ * `uXf` maps output UV to source UV projectively, so crop, rotate, straighten
+ * and perspective correction all cost nothing extra and the export is
+ * pixel-identical to the preview. The mip level is derived per pixel from the
+ * transform's own derivative, which keeps 12 MP phone files from aliasing when
+ * they land on a 1440 px canvas and stays correct under perspective, where the
+ * minification is not uniform across the frame.
  */
 export const FRAG_COMPOSITE = `#version 300 es
 precision highp float;
@@ -128,11 +140,9 @@ uniform sampler2D uClean;   // denoised + mipmapped
 uniform sampler2D uBlur;    // wide Gaussian, for clarity
 uniform sampler2D uOrig;    // untouched source, for the before/after wipe
 
-uniform mat3 uXf;
-uniform float uLod;
-uniform vec2 uDx;           // source-UV delta for one output pixel in x
-uniform vec2 uDy;
+uniform mat3 uXf;           // output UV -> source UV, projective
 uniform vec2 uOutSize;
+uniform vec2 uSrcSize;
 uniform float uAspect;      // output width / height, for a round vignette
 uniform float uSplit;       // wipe position 0..1; negative disables
 
@@ -152,21 +162,44 @@ float hash12(vec2 p) {
 }
 
 void main() {
-  vec2 uv = (uXf * vec3(vUv, 1.0)).xy;
+  // The single flip that turns clip space into image space; see VERT.
+  vec2 outUv = vec2(vUv.x, 1.0 - vUv.y);
 
-  // Outside the source (only reachable with an extreme straighten) paint the
-  // backdrop rather than smearing edge pixels.
+  // Projective transform: the divide by w is what lets one matrix express both
+  // the crop and the perspective correction.
+  vec3 p = uXf * vec3(outUv, 1.0);
+  if (abs(p.z) < 1e-6) { fragColor = vec4(0.055, 0.051, 0.047, 1.0); return; }
+  vec2 uv = p.xy / p.z;
+
+  // Outside the source - reachable by straightening, or by a perspective
+  // correction that pulls in area the camera never saw - paint the backdrop
+  // rather than smearing edge pixels.
   if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
     fragColor = vec4(0.055, 0.051, 0.047, 1.0);
     return;
   }
 
-  if (uSplit >= 0.0 && vUv.x < uSplit) {
-    fragColor = vec4(textureLod(uOrig, uv, uLod).rgb, 1.0);
+  // Analytic derivative of uv with respect to the output pixel, by the quotient
+  // rule on p.xy / p.z. Under perspective the scale differs across the frame -
+  // the far edge of a rectified plate is squeezed harder than the near edge -
+  // so the mip level and the sharpening radius have to be computed per pixel,
+  // not passed in as a constant.
+  vec3 c0 = uXf[0];
+  vec3 c1 = uXf[1];
+  float invZ2 = 1.0 / (p.z * p.z);
+  vec2 dUVdx = (c0.xy * p.z - p.xy * c0.z) * invZ2 / uOutSize.x;
+  vec2 dUVdy = (c1.xy * p.z - p.xy * c1.z) * invZ2 / uOutSize.y;
+
+  vec2 fx = dUVdx * uSrcSize;
+  vec2 fy = dUVdy * uSrcSize;
+  float lod = max(0.0, 0.5 * log2(max(dot(fx, fx), dot(fy, fy))));
+
+  if (uSplit >= 0.0 && outUv.x < uSplit) {
+    fragColor = vec4(textureLod(uOrig, uv, lod).rgb, 1.0);
     return;
   }
 
-  vec3 c = textureLod(uClean, uv, uLod).rgb;
+  vec3 c = textureLod(uClean, uv, lod).rgb;
   float lo = luma(c);
 
   // --- linear light: exposure and white balance ---------------------------
@@ -199,10 +232,10 @@ void main() {
 
   // --- sharpen: unsharp mask measured in output pixels --------------------
   if (uSharpen > 0.001) {
-    float n = luma(textureLod(uClean, uv + uDx, uLod).rgb)
-            + luma(textureLod(uClean, uv - uDx, uLod).rgb)
-            + luma(textureLod(uClean, uv + uDy, uLod).rgb)
-            + luma(textureLod(uClean, uv - uDy, uLod).rgb);
+    float n = luma(textureLod(uClean, uv + dUVdx, lod).rgb)
+            + luma(textureLod(uClean, uv - dUVdx, lod).rgb)
+            + luma(textureLod(uClean, uv + dUVdy, lod).rgb)
+            + luma(textureLod(uClean, uv - dUVdy, lod).rgb);
     float hp = lo - n * 0.25;
     hp = sign(hp) * max(abs(hp) - 0.004, 0.0);   // threshold, so grain is left alone
     c += uSharpen * hp * 1.9;
@@ -217,13 +250,13 @@ void main() {
 
   // --- vignette -----------------------------------------------------------
   if (abs(uVignette) > 0.001) {
-    vec2 p = (vUv - 0.5) * vec2(max(uAspect, 1.0), max(1.0 / uAspect, 1.0));
-    float r = length(p) * 1.32;
+    vec2 vp = (outUv - 0.5) * vec2(max(uAspect, 1.0), max(1.0 / uAspect, 1.0));
+    float r = length(vp) * 1.32;
     c *= 1.0 - uVignette * smoothstep(0.30, 1.05, r) * 0.85;
   }
 
   // --- grain, plus a permanent sub-LSB dither against 8-bit banding -------
-  float n2 = hash12(vUv * uOutSize + uSeed) - 0.5;
+  float n2 = hash12(outUv * uOutSize + uSeed) - 0.5;
   c += n2 * (uGrain * 0.075 + 0.0028);
 
   fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);

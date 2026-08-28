@@ -4,9 +4,10 @@ import { AdjustPanel } from './components/AdjustPanel'
 import { ExportPanel, type ExportConfig } from './components/ExportPanel'
 import { Filmstrip } from './components/Filmstrip'
 import { Hero } from './components/Hero'
-import { Stage } from './components/Stage'
+import { Stage, type Tool } from './components/Stage'
 import { Toasts, type Toast } from './components/Toasts'
 import { Exporter, saveBlob } from './engine/export'
+import { aspectRatio, centredCrop, framedSize } from './engine/geometry'
 import { applyPreset, PRESETS } from './engine/presets'
 import { TARGETS } from './engine/targets'
 import {
@@ -14,15 +15,28 @@ import {
   NEUTRAL_GEOMETRY,
   NEUTRAL_LEVELS,
   type Adjustments,
+  type Edit,
   type Geometry,
 } from './engine/types'
 import { createPhoto, decodeForExport, disposePhoto, type Photo } from './state/photos'
 
 let toastId = 0
 
+/** Consecutive changes with the same key inside this window collapse into one undo step. */
+const COALESCE_MS = 700
+const HISTORY_LIMIT = 80
+
+interface HistoryEntry {
+  past: Edit[]
+  future: Edit[]
+  lastKey: string
+  lastAt: number
+}
+
 export default function App() {
   const [photos, setPhotos] = useState<Photo[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [tool, setTool] = useState<Tool>('adjust')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   const [config, setConfig] = useState<ExportConfig>({
@@ -33,6 +47,7 @@ export default function App() {
 
   const photosRef = useRef(photos)
   photosRef.current = photos
+  const history = useRef(new Map<string, HistoryEntry>())
 
   const selected = useMemo(
     () => photos.find((p) => p.id === selectedId) ?? null,
@@ -46,8 +61,78 @@ export default function App() {
   }, [])
 
   const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), [])
-
   const reportError = useCallback((message: string) => notify('error', message), [notify])
+
+  // --- edit history ---------------------------------------------------------
+  const entryFor = (id: string): HistoryEntry => {
+    let e = history.current.get(id)
+    if (!e) {
+      e = { past: [], future: [], lastKey: '', lastAt: 0 }
+      history.current.set(id, e)
+    }
+    return e
+  }
+
+  /**
+   * Applies an edit and records the previous one.
+   *
+   * Dragging a slider fires dozens of changes a second; without coalescing,
+   * one undo would step back a single pixel of slider travel. Consecutive
+   * changes to the same control collapse into one step.
+   */
+  const patchEdit = useCallback(
+    (key: string, fn: (e: Edit) => Edit) => {
+      const list = photosRef.current
+      const idx = list.findIndex((p) => p.id === selectedId)
+      if (idx < 0) return
+      const cur = list[idx]
+      const next = fn(cur.edit)
+      if (next === cur.edit) return
+
+      const h = entryFor(cur.id)
+      const now = Date.now()
+      if (!(h.lastKey === key && now - h.lastAt < COALESCE_MS && h.past.length > 0)) {
+        h.past.push(cur.edit)
+        if (h.past.length > HISTORY_LIMIT) h.past.shift()
+      }
+      h.lastKey = key
+      h.lastAt = now
+      h.future = []
+
+      const nextList = list.slice()
+      nextList[idx] = { ...cur, edit: next }
+      // Keep the ref current so a fast drag does not read stale state between
+      // renders and drop intermediate moves.
+      photosRef.current = nextList
+      setPhotos(nextList)
+    },
+    [selectedId],
+  )
+
+  const step = useCallback(
+    (dir: 'undo' | 'redo') => {
+      const list = photosRef.current
+      const idx = list.findIndex((p) => p.id === selectedId)
+      if (idx < 0) return
+      const cur = list[idx]
+      const h = entryFor(cur.id)
+      const from = dir === 'undo' ? h.past : h.future
+      const to = dir === 'undo' ? h.future : h.past
+      if (from.length === 0) return
+      to.push(cur.edit)
+      const restored = from.pop()!
+      h.lastKey = ''
+      const nextList = list.slice()
+      nextList[idx] = { ...cur, edit: restored }
+      photosRef.current = nextList
+      setPhotos(nextList)
+    },
+    [selectedId],
+  )
+
+  const hist = selectedId ? history.current.get(selectedId) : undefined
+  const canUndo = (hist?.past.length ?? 0) > 0
+  const canRedo = (hist?.future.length ?? 0) > 0
 
   // --- loading --------------------------------------------------------------
   const addFiles = useCallback(
@@ -62,10 +147,13 @@ export default function App() {
         }
       }
       if (loaded.length) {
-        // A newly chosen export target should apply to incoming photos too.
         const target = TARGETS.find((t) => t.id === config.targetId)
-        if (target) {
-          for (const p of loaded) p.edit.geometry.aspect = target.aspect
+        if (target && target.aspect !== 'original') {
+          for (const p of loaded) {
+            const [fw, fh] = framedSize(p.preview.width, p.preview.height, p.edit.geometry)
+            p.edit.geometry.aspect = target.aspect
+            p.edit.geometry.crop = centredCrop(aspectRatio(target.aspect, fw, fh), fw, fh)
+          }
         }
         setPhotos((prev) => [...prev, ...loaded])
         setSelectedId((cur) => cur ?? loaded[0].id)
@@ -76,6 +164,7 @@ export default function App() {
   )
 
   const removePhoto = useCallback((id: string) => {
+    history.current.delete(id)
     setPhotos((prev) => {
       const gone = prev.find((p) => p.id === id)
       if (gone) disposePhoto(gone)
@@ -86,100 +175,109 @@ export default function App() {
   }, [])
 
   // --- editing --------------------------------------------------------------
-  const patchSelected = useCallback(
-    (fn: (p: Photo) => Photo) => {
-      setPhotos((prev) => prev.map((p) => (p.id === selectedId ? fn(p) : p)))
-    },
-    [selectedId],
-  )
-
   const onAdjust = useCallback(
     (patch: Partial<Adjustments>) =>
-      patchSelected((p) => ({
-        ...p,
-        presetId: 'custom',
-        edit: { ...p.edit, adjustments: { ...p.edit.adjustments, ...patch } },
+      patchEdit(`adj:${Object.keys(patch).join()}`, (e) => ({
+        ...e,
+        adjustments: { ...e.adjustments, ...patch },
       })),
-    [patchSelected],
+    [patchEdit],
   )
 
   const onGeometry = useCallback(
     (patch: Partial<Geometry>) =>
-      patchSelected((p) => ({ ...p, edit: { ...p.edit, geometry: { ...p.edit.geometry, ...patch } } })),
-    [patchSelected],
+      patchEdit(`geo:${Object.keys(patch).join()}`, (e) => ({
+        ...e,
+        geometry: { ...e.geometry, ...patch },
+      })),
+    [patchEdit],
   )
 
   const onResetFraming = useCallback(
-    () =>
-      patchSelected((p) => ({
-        ...p,
-        edit: {
-          ...p.edit,
-          geometry: { ...NEUTRAL_GEOMETRY, aspect: p.edit.geometry.aspect },
-        },
-      })),
-    [patchSelected],
+    () => patchEdit('geo:reset', (e) => ({ ...e, geometry: { ...NEUTRAL_GEOMETRY } })),
+    [patchEdit],
+  )
+
+  // Manual slider moves clear the preset highlight, because the photo is no
+  // longer what that preset produces.
+  const markCustom = useCallback(
+    (patch: Partial<Adjustments>) => {
+      onAdjust(patch)
+      setPhotos((prev) =>
+        prev.map((p) => (p.id === selectedId && p.presetId !== 'custom' ? { ...p, presetId: 'custom' } : p)),
+      )
+    },
+    [onAdjust, selectedId],
   )
 
   const choosePreset = useCallback(
     (presetId: string) => {
       const preset = PRESETS.find((x) => x.id === presetId)
-      if (!preset) return
-      patchSelected((p) => ({
-        ...p,
-        presetId,
-        // Presets always build on this photo's own Auto result, so switching
-        // between them never compounds.
-        edit: {
-          ...p.edit,
-          adjustments: applyPreset(p.auto.adjustments, preset),
-          levels: p.auto.levels,
-        },
-      }))
+      if (!preset || !selectedId) return
+      // Presets always build on this photo's own Auto result, so switching
+      // between them never compounds.
+      patchEdit(`preset:${presetId}`, (e) => {
+        const p = photosRef.current.find((x) => x.id === selectedId)!
+        return { ...e, adjustments: applyPreset(p.auto.adjustments, preset), levels: p.auto.levels }
+      })
+      setPhotos((prev) => prev.map((p) => (p.id === selectedId ? { ...p, presetId } : p)))
     },
-    [patchSelected],
+    [patchEdit, selectedId],
   )
 
-  const resetToOriginal = useCallback(
-    () =>
-      patchSelected((p) => ({
-        ...p,
-        presetId: 'none',
-        edit: { ...p.edit, adjustments: { ...NEUTRAL }, levels: { ...NEUTRAL_LEVELS } },
-      })),
-    [patchSelected],
-  )
+  const resetToOriginal = useCallback(() => {
+    patchEdit('preset:none', (e) => ({
+      ...e,
+      adjustments: { ...NEUTRAL },
+      levels: { ...NEUTRAL_LEVELS },
+    }))
+    setPhotos((prev) => prev.map((p) => (p.id === selectedId ? { ...p, presetId: 'none' } : p)))
+  }, [patchEdit, selectedId])
 
   /**
    * Copies the sliders to every photo but leaves each one's own measured black
    * and white points alone: a consistent look across the set, without forcing
-   * one photo's levels onto a differently-exposed shot.
+   * one photo's levels onto a differently-exposed shot. Framing stays personal
+   * to each photo, since what needs to stay in frame differs shot to shot.
    */
   const applyToAll = useCallback(() => {
     if (!selected) return
     const adjustments = { ...selected.edit.adjustments }
     const presetId = selected.presetId
-    setPhotos((prev) =>
-      prev.map((p) => (p.id === selected.id ? p : { ...p, presetId, edit: { ...p.edit, adjustments } })),
-    )
-    notify('ok', `Applied to all ${photos.length} photos.`)
-  }, [selected, photos.length, notify])
+    const next = photosRef.current.map((p) => {
+      if (p.id === selected.id) return p
+      entryFor(p.id).past.push(p.edit)
+      return { ...p, presetId, edit: { ...p.edit, adjustments } }
+    })
+    photosRef.current = next
+    setPhotos(next)
+    notify('ok', `Applied to all ${next.length} photos.`)
+  }, [selected, notify])
 
   // Changing the export target re-shapes every photo, because the export will
   // crop them all to that shape anyway.
   const updateConfig = useCallback((patch: Partial<ExportConfig>) => {
-    setConfig((c) => {
-      const next = { ...c, ...patch }
-      if (patch.targetId) {
-        const t = TARGETS.find((x) => x.id === patch.targetId)
-        if (t) {
-          setPhotos((prev) =>
-            prev.map((p) => ({ ...p, edit: { ...p.edit, geometry: { ...p.edit.geometry, aspect: t.aspect } } })),
-          )
-        }
+    setConfig((c) => ({ ...c, ...patch }))
+    if (!patch.targetId) return
+    const t = TARGETS.find((x) => x.id === patch.targetId)
+    if (!t) return
+    const next = photosRef.current.map((p) => {
+      // A photo already in the target shape keeps the crop the user drew;
+      // re-picking the same target should not throw their framing away.
+      if (p.edit.geometry.aspect === t.aspect) return p
+      const [fw, fh] = framedSize(p.preview.width, p.preview.height, p.edit.geometry)
+      const ratio = aspectRatio(t.aspect, fw, fh)
+      entryFor(p.id).past.push(p.edit)
+      return {
+        ...p,
+        edit: {
+          ...p.edit,
+          geometry: { ...p.edit.geometry, aspect: t.aspect, crop: centredCrop(ratio, fw, fh) },
+        },
       }
-      return next
     })
+    photosRef.current = next
+    setPhotos(next)
   }, [])
 
   // --- exporting ------------------------------------------------------------
@@ -202,7 +300,6 @@ export default function App() {
           } finally {
             bitmap.close()
           }
-          // Yield so the progress label actually paints between photos.
           await new Promise((r) => setTimeout(r, 0))
         }
         if (zip) {
@@ -222,8 +319,6 @@ export default function App() {
   )
 
   // --- paste ----------------------------------------------------------------
-  // Copying an image in another app or browser tab and pressing Ctrl/Cmd+V here
-  // is often quicker than saving it to disk first.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const files = Array.from(e.clipboardData?.files ?? []).filter((f) =>
@@ -242,7 +337,14 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.isContentEditable)) return
+      const typing = el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.isContentEditable)
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault()
+        step(e.shiftKey ? 'redo' : 'undo')
+        return
+      }
+      if (typing || e.metaKey || e.ctrlKey) return
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
       const list = photosRef.current
       if (list.length < 2) return
@@ -253,7 +355,12 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedId])
+  }, [selectedId, step])
+
+  const selectPhoto = useCallback((id: string) => {
+    setSelectedId(id)
+    setTool('adjust')
+  }, [])
 
   return (
     <div className="app">
@@ -290,11 +397,32 @@ export default function App() {
 
         <div className="topbar-spacer" />
 
+        {selected && (
+          <div className="undo-pair">
+            <button
+              className="btn btn-sm"
+              onClick={() => step('undo')}
+              disabled={!canUndo}
+              title="Undo  (Ctrl/Cmd + Z)"
+            >
+              ↶
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => step('redo')}
+              disabled={!canRedo}
+              title="Redo  (Ctrl/Cmd + Shift + Z)"
+            >
+              ↷
+            </button>
+          </div>
+        )}
+
         {photos.length > 1 && (
           <button
             className="btn btn-sm"
             onClick={applyToAll}
-            title="Copy these sliders to every photo. Each photo keeps its own measured black and white points."
+            title="Copy these sliders to every photo. Each photo keeps its own measured black and white points, and its own framing."
           >
             Apply to all
           </button>
@@ -312,18 +440,22 @@ export default function App() {
           <Filmstrip
             photos={photos}
             selectedId={selectedId}
-            onSelect={setSelectedId}
+            onSelect={selectPhoto}
             onRemove={removePhoto}
             onFiles={addFiles}
           />
           <Stage
             photo={selected}
+            tool={tool}
+            onTool={setTool}
             onGeometry={onGeometry}
             onError={reportError}
           />
           <AdjustPanel
             photo={selected}
-            onAdjust={onAdjust}
+            tool={tool}
+            onTool={setTool}
+            onAdjust={markCustom}
             onGeometry={onGeometry}
             onResetFraming={onResetFraming}
             footer={

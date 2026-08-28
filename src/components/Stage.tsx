@@ -1,18 +1,47 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { cropFrame, cropPixelSize, targetAspect } from '../engine/geometry'
+import {
+  cropInViewSpace,
+  cropPixelSize,
+  cropRectFromViewSpace,
+  framedSize,
+  fullViewSize,
+  resolveCrop,
+  type ViewMode,
+} from '../engine/geometry'
 import { Renderer } from '../engine/renderer'
+import { rotatedSize } from '../engine/geometry'
 import type { Geometry } from '../engine/types'
 import type { Photo } from '../state/photos'
+import { CropOverlay } from './CropOverlay'
+import { PerspectiveOverlay } from './PerspectiveOverlay'
+
+export type Tool = 'adjust' | 'crop' | 'perspective'
+
+const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
+  { id: 'adjust', label: 'Adjust', key: 'A', icon: '◐' },
+  { id: 'crop', label: 'Crop', key: 'C', icon: '⌗' },
+  { id: 'perspective', label: 'Perspective', key: 'P', icon: '◧' },
+]
 
 /** Cap the backing store so a 4K monitor does not ask for a needlessly huge preview. */
 const MAX_PREVIEW_EDGE = 2600
 
+const VIEW_FOR: Record<Tool, ViewMode> = {
+  adjust: 'edit',
+  crop: 'crop',
+  perspective: 'perspective',
+}
+
 export function Stage({
   photo,
+  tool,
+  onTool,
   onGeometry,
   onError,
 }: {
   photo: Photo
+  tool: Tool
+  onTool: (t: Tool) => void
   onGeometry: (patch: Partial<Geometry>) => void
   onError: (message: string) => void
 }) {
@@ -25,8 +54,9 @@ export function Stage({
   const [box, setBox] = useState({ w: 0, h: 0 })
   const [compare, setCompare] = useState(false)
   const [split, setSplit] = useState(0.5)
-  const [dragging, setDragging] = useState<null | 'pan' | 'wipe'>(null)
-  const panStart = useRef({ x: 0, y: 0, ox: 0, oy: 0 })
+  const [panning, setPanning] = useState(false)
+  const [wiping, setWiping] = useState(false)
+  const panStart = useRef({ x: 0, y: 0, ex: 0, ey: 0 })
 
   // Held in a ref so the renderer effect below can have empty deps. A WebGL
   // context is expensive and browsers only allow a handful at once, so it must
@@ -66,9 +96,24 @@ export function Stage({
   const geo = photo.edit.geometry
   const pw = photo.preview.width
   const ph = photo.preview.height
-  const aspect = targetAspect(pw, ph, geo)
+  const view = VIEW_FOR[tool]
 
-  // Fit the crop aspect into the available box.
+  // Each tool frames the photo differently: Adjust shows the finished crop,
+  // Crop shows the whole straightened frame so the box can grow, Perspective
+  // shows the photo untouched so the handles stay put.
+  let viewW: number
+  let viewH: number
+  if (view === 'edit') {
+    const c = resolveCrop(pw, ph, geo)
+    viewW = c.cw
+    viewH = c.ch
+  } else if (view === 'crop') {
+    ;[viewW, viewH] = fullViewSize(pw, ph, geo)
+  } else {
+    ;[viewW, viewH] = rotatedSize(pw, ph, geo.rotate90)
+  }
+  const aspect = viewW / viewH
+
   let cssW = box.w
   let cssH = cssW / aspect
   if (cssH > box.h) {
@@ -79,12 +124,9 @@ export function Stage({
   cssH = Math.max(1, Math.floor(cssH))
 
   const dpr = Math.min(typeof devicePixelRatio === 'number' ? devicePixelRatio : 1, 2)
-  const frame = cropFrame(pw, ph, geo)
   let bw = Math.round(cssW * dpr)
   let bh = Math.round(cssH * dpr)
-  // Never ask for more pixels than the source crop actually has, and never
-  // exceed the cap. Both keep the aspect intact.
-  const limit = Math.min(MAX_PREVIEW_EDGE, Math.max(frame.cw, frame.ch))
+  const limit = Math.min(MAX_PREVIEW_EDGE, Math.max(viewW, viewH))
   const longest = Math.max(bw, bh)
   if (longest > limit) {
     const s = limit / longest
@@ -109,76 +151,133 @@ export function Stage({
     frameReq.current = requestAnimationFrame(() => {
       try {
         r.render(bw, bh, photo.edit, {
-          split: compare ? split : -1,
+          split: compare && tool === 'adjust' ? split : -1,
           seed: photo.seed,
+          view,
         })
       } catch (err) {
         onErrorRef.current((err as Error).message)
       }
     })
     return () => cancelAnimationFrame(frameReq.current)
-  }, [photo, photo.edit, bw, bh, cssW, cssH, compare, split, box.w])
+  }, [photo, photo.edit, bw, bh, cssW, cssH, compare, split, box.w, view, tool])
 
-  // --- panning the crop -----------------------------------------------------
-  const canPan = frame.slackX > 0.5 || frame.slackY > 0.5
+  // --- drag the photo inside its crop, in Adjust ---------------------------
+  const inView = cropInViewSpace(pw, ph, geo)
+  const [fw, fh] = framedSize(pw, ph, geo)
+  const canPan =
+    tool === 'adjust' && (inView.cw < fw - 1 || inView.ch < fh - 1)
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (!canPan) return
       ;(e.target as Element).setPointerCapture(e.pointerId)
-      panStart.current = { x: e.clientX, y: e.clientY, ox: geo.offsetX, oy: geo.offsetY }
-      setDragging('pan')
+      panStart.current = { x: e.clientX, y: e.clientY, ex: inView.ex, ey: inView.ey }
+      setPanning(true)
     },
-    [canPan, geo.offsetX, geo.offsetY],
+    [canPan, inView.ex, inView.ey],
   )
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
-      if (dragging !== 'pan') return
-      // Screen pixels -> source pixels -> fraction of the available slack.
-      const perPxX = frame.cw / Math.max(cssW, 1)
-      const perPxY = frame.ch / Math.max(cssH, 1)
-      const dx = ((e.clientX - panStart.current.x) * perPxX) / Math.max(frame.slackX, 1e-3)
-      const dy = ((e.clientY - panStart.current.y) * perPxY) / Math.max(frame.slackY, 1e-3)
+      if (!panning) return
+      // Dragging right should move the photo right, so the crop moves left.
+      const dx = ((e.clientX - panStart.current.x) * inView.cw) / Math.max(cssW, 1)
+      const dy = ((e.clientY - panStart.current.y) * inView.ch) / Math.max(cssH, 1)
       onGeometry({
-        offsetX: Math.max(-1, Math.min(1, panStart.current.ox - dx)),
-        offsetY: Math.max(-1, Math.min(1, panStart.current.oy - dy)),
+        crop: cropRectFromViewSpace(
+          pw,
+          ph,
+          geo,
+          panStart.current.ex - dx,
+          panStart.current.ey - dy,
+          inView.cw,
+          inView.ch,
+        ),
       })
     },
-    [dragging, frame.cw, frame.ch, frame.slackX, frame.slackY, cssW, cssH, onGeometry],
+    [panning, inView.cw, inView.ch, cssW, cssH, pw, ph, geo, onGeometry],
   )
 
-  const endDrag = useCallback(() => setDragging(null), [])
+  const endPan = useCallback(() => setPanning(false), [])
 
   // --- before/after wipe ----------------------------------------------------
   const onWipeMove = useCallback(
     (e: React.PointerEvent) => {
-      if (dragging !== 'wipe') return
+      if (!wiping) return
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
       setSplit(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)))
     },
-    [dragging],
+    [wiping],
   )
 
+  // --- keyboard tool switching ---------------------------------------------
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.isContentEditable)) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const k = e.key.toLowerCase()
+      if (k === 'c') onTool(tool === 'crop' ? 'adjust' : 'crop')
+      else if (k === 'p') onTool(tool === 'perspective' ? 'adjust' : 'perspective')
+      else if (k === 'a' || e.key === 'Escape') onTool('adjust')
+      else if (k === '\\') setCompare((v) => !v)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [tool, onTool])
+
   const [cropW, cropH] = cropPixelSize(photo.nativeWidth, photo.nativeHeight, geo)
+  const cropped = cropW !== photo.nativeWidth || cropH !== photo.nativeHeight
 
   return (
     <section className="stage">
+      <div className="tool-rail" role="tablist" aria-label="Tools">
+        {TOOLS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tool === t.id}
+            className="tool-btn"
+            onClick={() => onTool(t.id)}
+            title={`${t.label}  (${t.key})`}
+          >
+            <span aria-hidden="true">{t.icon}</span>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       <div className="stage-canvas-wrap" ref={wrapRef}>
         <div
-          className={`canvas-frame${canPan ? ' grabbable' : ''}${dragging === 'pan' ? ' grabbing' : ''}`}
+          className={`canvas-frame${canPan ? ' grabbable' : ''}${panning ? ' grabbing' : ''}`}
           style={{ width: cssW, height: cssH }}
           onPointerMove={onWipeMove}
-          onPointerUp={endDrag}
+          onPointerUp={() => setWiping(false)}
         >
           <canvas
             ref={canvasRef}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
+            onPointerUp={endPan}
+            onPointerCancel={endPan}
           />
-          {compare && (
+
+          {tool === 'crop' && (
+            <CropOverlay photo={photo} cssW={cssW} cssH={cssH} onGeometry={onGeometry} />
+          )}
+
+          {tool === 'perspective' && (
+            <PerspectiveOverlay
+              photo={photo}
+              cssW={cssW}
+              cssH={cssH}
+              canvas={canvasRef.current}
+              onGeometry={onGeometry}
+            />
+          )}
+
+          {tool === 'adjust' && compare && (
             <>
               <span className="wipe-label before">Before</span>
               <span className="wipe-label after">After</span>
@@ -189,13 +288,25 @@ export function Stage({
                 aria-label="Before and after divider"
                 onPointerDown={(e) => {
                   ;(e.target as Element).setPointerCapture(e.pointerId)
-                  setDragging('wipe')
+                  setWiping(true)
                 }}
-                onPointerUp={endDrag}
+                onPointerUp={() => setWiping(false)}
               />
             </>
           )}
         </div>
+
+        {tool === 'perspective' && (
+          <p className="stage-hint">
+            Drag the four corners onto something that is <b>really</b> a rectangle — the rim of
+            the plate, the edge of the table, a menu. Arrow keys nudge; hold Shift to move faster.
+          </p>
+        )}
+        {tool === 'crop' && (
+          <p className="stage-hint">
+            Drag the edges and corners. Pick a shape or lock it to <b>Free</b> in the Frame panel.
+          </p>
+        )}
       </div>
 
       <div className="stage-bar">
@@ -204,22 +315,30 @@ export function Stage({
         <span>
           {photo.nativeWidth} × {photo.nativeHeight}
         </span>
-        {(cropW !== photo.nativeWidth || cropH !== photo.nativeHeight) && (
+        {cropped && (
           <>
             <span className="sep">→</span>
             <span>
-              cropped {cropW} × {cropH}
+              {cropW} × {cropH}
             </span>
           </>
         )}
+        {geo.corners && <span className="tag">perspective corrected</span>}
+        {!photo.previewIsSource && (
+          <span title="The on-screen preview is rendered from a 2200 px copy. The export is rendered from the original.">
+            preview {Math.round((photo.preview.width / photo.nativeWidth) * 100)}%
+          </span>
+        )}
         <div className="topbar-spacer" />
-        <button
-          className="btn btn-sm"
-          aria-pressed={compare}
-          onClick={() => setCompare((v) => !v)}
-        >
-          {compare ? 'Hide before' : 'Compare'}
-        </button>
+        {tool === 'adjust' ? (
+          <button className="btn btn-sm" aria-pressed={compare} onClick={() => setCompare((v) => !v)}>
+            {compare ? 'Hide before' : 'Compare'}
+          </button>
+        ) : (
+          <button className="btn btn-sm btn-primary" onClick={() => onTool('adjust')}>
+            Done
+          </button>
+        )}
       </div>
     </section>
   )

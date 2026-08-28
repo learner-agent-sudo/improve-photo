@@ -6,6 +6,9 @@
  * each tile by calling exactly the same pipeline, so a photo looks identical
  * on its own and inside a grid.
  */
+import type { Pt } from './matrix'
+
+export type { Pt }
 
 /** Tone / colour / detail sliders. All normalised to -1..1 (or 0..1). */
 export interface Adjustments {
@@ -63,6 +66,7 @@ export const NEUTRAL: Adjustments = {
 }
 
 export type AspectKey =
+  | 'free'
   | 'original'
   | '1:1'
   | '4:5'
@@ -72,7 +76,7 @@ export type AspectKey =
   | '3:2'
   | '16:9'
 
-export const ASPECT_RATIOS: Record<Exclude<AspectKey, 'original'>, number> = {
+export const ASPECT_RATIOS: Record<Exclude<AspectKey, 'original' | 'free'>, number> = {
   '1:1': 1,
   '4:5': 4 / 5,
   '3:4': 3 / 4,
@@ -82,29 +86,80 @@ export const ASPECT_RATIOS: Record<Exclude<AspectKey, 'original'>, number> = {
   '16:9': 16 / 9,
 }
 
-/** Framing: rotation, straightening and the crop rectangle. */
+/** A rectangle in normalised 0..1 coordinates. */
+export interface Rect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export const FULL_RECT: Rect = { x: 0, y: 0, w: 1, h: 1 }
+
+/** The four corners of the unit square, in the order used everywhere: TL, TR, BR, BL. */
+export const UNIT_QUAD: [Pt, Pt, Pt, Pt] = [
+  { x: 0, y: 0 },
+  { x: 1, y: 0 },
+  { x: 1, y: 1 },
+  { x: 0, y: 1 },
+]
+
+/**
+ * Framing: perspective correction, then rotation, straightening and the crop.
+ *
+ * The order matters and is fixed: a photo is first *rectified* (the off-axis
+ * shot is flattened to face-on), and only then rotated, straightened and
+ * cropped. Doing it the other way round would mean the crop you drew moves as
+ * soon as you touch the perspective.
+ */
 export interface Geometry {
   /** Quarter turns clockwise, 0-3. */
   rotate90: 0 | 1 | 2 | 3
   flipH: boolean
-  /** Straighten angle in degrees, -15..15. */
+  /** Straighten angle in degrees, -20..20. */
   straighten: number
+
+  /**
+   * The quadrilateral in the photo that is really a rectangle, in source UV,
+   * corners TL/TR/BR/BL. Null means no perspective correction.
+   */
+  corners: [Pt, Pt, Pt, Pt] | null
+  /** Keystone: -1 leans the top away, +1 leans the bottom away. */
+  tiltV: number
+  /** Keystone about the vertical axis. */
+  tiltH: number
+
+  /** Constrains handle dragging and the ratio buttons. 'free' leaves it open. */
   aspect: AspectKey
-  /** 1 = crop as large as will fit; >1 zooms in. */
-  zoom: number
-  /** Pan within the frame, -1..1 of the available slack. */
-  offsetX: number
-  offsetY: number
+  /** The crop, in normalised coordinates of the straightened, rectified frame. */
+  crop: Rect
 }
 
 export const NEUTRAL_GEOMETRY: Geometry = {
   rotate90: 0,
   flipH: false,
   straighten: 0,
+  corners: null,
+  tiltV: 0,
+  tiltH: 0,
   aspect: 'original',
-  zoom: 1,
-  offsetX: 0,
-  offsetY: 0,
+  crop: { ...FULL_RECT },
+}
+
+/** True when the photo is being framed exactly as it was shot. */
+export function isNeutralGeometry(g: Geometry): boolean {
+  return (
+    g.rotate90 === 0 &&
+    !g.flipH &&
+    g.straighten === 0 &&
+    g.corners === null &&
+    g.tiltV === 0 &&
+    g.tiltH === 0 &&
+    g.crop.x === 0 &&
+    g.crop.y === 0 &&
+    g.crop.w === 1 &&
+    g.crop.h === 1
+  )
 }
 
 /** Auto-levels endpoints derived from the histogram, in sRGB 0..1. */

@@ -377,7 +377,7 @@ button { cursor: pointer; background: none; border: none; padding: 0; }
   min-height: 0;
   display: grid;
   place-items: center;
-  padding: 26px;
+  padding: 64px 26px 26px;
   position: relative;
 }
 
@@ -661,6 +661,10 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
 .aspect-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+}
+
+.aspect-grid.three {
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   margin-bottom: 14px;
 }
@@ -968,4 +972,200 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+
+/* --------------------------------------------------------------------------
+   Tool rail
+   -------------------------------------------------------------------------- */
+
+.tool-rail {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(21, 19, 16, 0.86);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 30px -14px rgba(0, 0, 0, 0.9);
+}
+
+.tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 15px;
+  border-radius: 999px;
+  color: var(--paper-3);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+.tool-btn span { font-size: 13px; line-height: 1; opacity: 0.9; }
+.tool-btn:hover { color: var(--paper); background: var(--ink-750); }
+.tool-btn[aria-selected='true'] {
+  background: var(--amber);
+  color: #2a1a06;
+  font-weight: 600;
+}
+
+.stage-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: min(560px, calc(100% - 40px));
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--paper-3);
+  background: rgba(21, 19, 16, 0.86);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 7px 16px;
+  pointer-events: none;
+}
+.stage-hint b { color: var(--amber); font-weight: 600; }
+
+.undo-pair { display: flex; gap: 4px; }
+.undo-pair .btn { width: 32px; padding: 0; font-size: 15px; }
+
+.stage-bar .tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--amber-dim);
+  color: var(--amber);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+/* --------------------------------------------------------------------------
+   Crop overlay
+   -------------------------------------------------------------------------- */
+
+.crop-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: 3px;
+}
+
+.crop-box {
+  position: absolute;
+  pointer-events: auto;
+  cursor: move;
+  outline: 1px solid rgba(244, 239, 230, 0.92);
+  /* One huge shadow is the cheapest way to dim everything outside the box. */
+  box-shadow: 0 0 0 9999px rgba(8, 7, 6, 0.62);
+  transition: box-shadow 0.15s;
+}
+.crop-box.active { box-shadow: 0 0 0 9999px rgba(8, 7, 6, 0.78); }
+
+.crop-grid { position: absolute; inset: 0; pointer-events: none; }
+.crop-grid i,
+.crop-grid b {
+  position: absolute;
+  background: rgba(244, 239, 230, 0.26);
+}
+.crop-grid i { top: 0; bottom: 0; width: 1px; }
+.crop-grid b { left: 0; right: 0; height: 1px; }
+
+.crop-handle { position: absolute; pointer-events: auto; }
+
+.crop-handle.corner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--paper);
+}
+.crop-handle.corner.nw { top: -3px; left: -3px; border-right: none; border-bottom: none; cursor: nwse-resize; }
+.crop-handle.corner.ne { top: -3px; right: -3px; border-left: none; border-bottom: none; cursor: nesw-resize; }
+.crop-handle.corner.se { bottom: -3px; right: -3px; border-left: none; border-top: none; cursor: nwse-resize; }
+.crop-handle.corner.sw { bottom: -3px; left: -3px; border-right: none; border-top: none; cursor: nesw-resize; }
+
+.crop-handle.edge { background: var(--paper); border-radius: 2px; }
+.crop-handle.edge.n { top: -2px; left: 50%; width: 34px; height: 4px; margin-left: -17px; cursor: ns-resize; }
+.crop-handle.edge.s { bottom: -2px; left: 50%; width: 34px; height: 4px; margin-left: -17px; cursor: ns-resize; }
+.crop-handle.edge.w { left: -2px; top: 50%; height: 34px; width: 4px; margin-top: -17px; cursor: ew-resize; }
+.crop-handle.edge.e { right: -2px; top: 50%; height: 34px; width: 4px; margin-top: -17px; cursor: ew-resize; }
+
+.crop-readout {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(10, 9, 8, 0.8);
+  color: var(--paper-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.crop-box:hover .crop-readout,
+.crop-box.active .crop-readout { opacity: 1; }
+
+/* --------------------------------------------------------------------------
+   Perspective overlay
+   -------------------------------------------------------------------------- */
+
+.persp-overlay { position: absolute; inset: 0; touch-action: none; }
+.persp-overlay svg { position: absolute; inset: 0; pointer-events: none; }
+
+.persp-handle {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px;
+  border-radius: 50%;
+  border: 2px solid var(--amber);
+  background: rgba(242, 160, 61, 0.16);
+  backdrop-filter: blur(2px);
+  cursor: grab;
+  transition: transform 0.12s, background 0.12s;
+  touch-action: none;
+}
+.persp-handle::after {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: var(--paper);
+}
+.persp-handle:hover { transform: scale(1.14); background: rgba(242, 160, 61, 0.3); }
+.persp-handle.dragging { cursor: grabbing; transform: scale(1.2); background: rgba(242, 160, 61, 0.42); }
+
+.loupe {
+  position: absolute;
+  top: 14px;
+  z-index: 8;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: rgba(21, 19, 16, 0.92);
+  box-shadow: 0 14px 34px -16px rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+}
+.loupe.left { left: 14px; }
+.loupe.right { right: 14px; }
+.loupe canvas { display: block; border-radius: 4px; }
+
+@media (max-width: 1080px) {
+  .stage-canvas-wrap { padding: 58px 12px 12px; }
+  .tool-btn { padding: 0 11px; font-size: 12px; }
+  .stage-hint { display: none; }
 }

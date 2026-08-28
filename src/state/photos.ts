@@ -26,6 +26,8 @@ export interface Photo {
   nativeHeight: number
   preview: ImageBitmap
   thumbUrl: string
+  /** True when `preview` is the decoded original rather than a downscale of it. */
+  previewIsSource: boolean
   analysis: Analysis
   auto: AutoResult
   edit: Edit
@@ -56,19 +58,29 @@ async function makeThumbUrl(bitmap: ImageBitmap): Promise<string> {
 
 export async function createPhoto(file: File): Promise<Photo> {
   const full = await decodeImageFile(file)
+  // Read these now: closing an ImageBitmap zeroes its width and height.
+  const nativeWidth = full.width
+  const nativeHeight = full.height
   try {
     // Analyse at native resolution: the noise estimate is meaningless otherwise.
     const analysis = analyseBitmap(full)
     const auto = autoEnhance(analysis)
     const preview = await fitBitmap(full, PREVIEW_EDGE)
     const thumbUrl = await makeThumbUrl(full)
+    // fitBitmap hands back the *same* bitmap when no downscale was needed, which
+    // is the case for anything already 2200 px or smaller - most images saved
+    // from the web. Closing `full` unconditionally would then close the preview
+    // too and leave a 0x0 image.
+    const previewIsSource = preview === full
+    // When a downscale did happen, the original is now redundant.
+    if (!previewIsSource) full.close()
 
     return {
       id: `p${++counter}-${Date.now().toString(36)}`,
       name: file.name,
       file,
-      nativeWidth: full.width,
-      nativeHeight: full.height,
+      nativeWidth,
+      nativeHeight,
       preview,
       thumbUrl,
       analysis,
@@ -80,10 +92,11 @@ export async function createPhoto(file: File): Promise<Photo> {
       },
       presetId: 'auto',
       seed: Math.floor(Math.random() * 997) + 3,
+      previewIsSource,
     }
-  } finally {
-    // The preview is an independent bitmap, so the full-size one can go now.
+  } catch (err) {
     full.close()
+    throw err
   }
 }
 

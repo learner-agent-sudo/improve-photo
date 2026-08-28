@@ -124,6 +124,8 @@ File picked in the browser
         │                      noise sigma (512 px crop at NATIVE resolution)
         ├─ auto.ts ........... Analysis  ->  slider values
         │
+        ├─ matrix.ts ......... 3x3 maths, incl. unit-square-to-quad homography
+        ├─ geometry.ts ....... perspective + rotate + straighten + crop, as ONE matrix
         ├─ renderer.ts ....... WebGL2, four passes, live preview
         │
         └─ export.ts ......... re-decode the original, render again, encode, download
@@ -163,10 +165,52 @@ pixel apart. A 12 MP photo sharpened at native resolution and then shrunk to
 1080 px loses all of that sharpening and gains aliasing. This way a photo
 destined for a 1080 px post gets the amount of bite that size needs.
 
-**Crop, rotate and straighten are one 3×3 matrix** mapping output UV to source
-UV (`src/engine/geometry.ts`). There is no intermediate resample, the export is
-pixel-identical to the preview, and — the reason it matters for stage 2 — an
-arbitrary output rectangle of an arbitrary aspect costs nothing extra.
+**Perspective, crop, rotate and straighten are one 3×3 matrix** mapping output
+UV to source UV (`src/engine/geometry.ts`). There is no intermediate resample,
+the export is pixel-identical to the preview, and — the reason it matters for
+stage 2 — an arbitrary output rectangle of an arbitrary aspect costs nothing
+extra.
+
+The matrix is *projective*, not merely affine, which is what makes "the photo
+was taken at an angle, make it straight-on" a free feature rather than a second
+pipeline. The chain, applied right to left, is:
+
+```
+source UV  <-  H  <-  un-rotate  <-  flip  <-  straighten  <-  crop  <-  output UV
+                |
+                perspective: rectified frame -> source
+```
+
+Order matters and is fixed. The photo is rectified first and only then rotated,
+straightened and cropped — otherwise the crop you drew would move the moment you
+touched the perspective.
+
+`H` comes from the closed-form unit-square-to-quadrilateral map (Heckbert 1989,
+§2.2): four point correspondences determine a homography uniquely, so no
+least-squares solve is needed. The corner handles and the keystone sliders both
+produce a quadrilateral and compose by matrix multiplication, which is why they
+are one mechanism rather than two parallel ones.
+
+Two consequences the shader has to handle:
+
+- **The mip level and the sharpening radius are computed per pixel**, from the
+  analytic derivative of `p.xy / p.z`. Under perspective the minification is not
+  uniform — the far edge of a rectified plate is squeezed harder than the near
+  edge — so a single LOD uniform would over-blur one end and alias the other.
+- **Flattening a quadrilateral cannot recover the rectangle's true aspect**
+  without the camera's focal length, which a JPEG may not carry. We take the
+  mean of the opposite edge lengths. For the angles people actually shoot at
+  that is close, and it is predictable, which matters more than being
+  theoretically optimal.
+
+**One orientation for every pass.** Clip space is y-up, and the two kinds of
+render target disagree about what that means: in a framebuffer texture NDC
+y = −1 is row V = 0, but the browser presents NDC y = +1 at the *top* of the
+HTML canvas. Flipping V in the vertex shader therefore corrects the screen while
+silently inverting every intermediate texture. All four passes share one
+orientation — V = 0 is the first uploaded row, the top of the photo — and only
+the composite flips, once, when it turns `vUv` into the output coordinate it
+feeds to the transform.
 
 ### Memory strategy
 
@@ -217,7 +261,7 @@ interface CollageLayout {
 interface Collage {
   layoutId: string
   slots: (CollageSlot | null)[]
-  canvasAspect: AspectKey      // reuses stage 1's crop ratios
+  canvasAspect: AspectKey      // reuses stage 1's crop ratios, 'free' included
   longEdge: number             // reuses stage 1's export targets
   gutter: number               // gap between cells, % of the canvas short edge
   padding: number              // outer margin
@@ -280,8 +324,10 @@ src/components/LayoutPicker.tsx
 src/App.tsx                   a mode switch: Enhance | Combine
 ```
 
-Nothing in `src/engine/renderer.ts`, `geometry.ts` or `shaders.ts` needs to
-change. That was the point of drawing the boundary where it is.
+Nothing in `src/engine/matrix.ts`, `renderer.ts`, `geometry.ts` or `shaders.ts`
+needs to change. That was the point of drawing the boundary where it is — and
+it now also means a photo that was perspective-corrected on its own arrives in a
+collage tile already corrected, for free.
 
 ### Honest estimate
 

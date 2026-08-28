@@ -5,7 +5,7 @@
  * at full resolution and disposes it. Both run identical code, so what you see
  * is what you download.
  */
-import { buildTransform, cropFrame, outputSize, pixelSteps } from './geometry'
+import { buildTransform, outputSize, resolveCrop, type ViewMode } from './geometry'
 import { FRAG_BLUR, FRAG_COMPOSITE, FRAG_DENOISE, VERT } from './shaders'
 import type { Edit } from './types'
 
@@ -79,6 +79,11 @@ export interface RenderOptions {
   split?: number
   /** Stable per-photo grain seed. */
   seed?: number
+  /**
+   * Which framing to draw. The crop and perspective tools need to see beyond
+   * the finished crop, so they ask for a wider view of the same photo.
+   */
+  view?: ViewMode
 }
 
 export class Renderer {
@@ -228,8 +233,8 @@ export class Renderer {
 
   /** Output size for a given long edge, honouring the crop aspect. */
   outputSizeFor(edit: Edit, longEdge: number): [number, number] {
-    const frame = cropFrame(this.srcW, this.srcH, edit.geometry)
-    return outputSize(frame.cw, frame.ch, longEdge)
+    const c = resolveCrop(this.srcW, this.srcH, edit.geometry)
+    return outputSize(c.cw, c.ch, longEdge)
   }
 
   render(outW: number, outH: number, edit: Edit, opts: RenderOptions = {}) {
@@ -297,15 +302,10 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, this.texSrc)
     gl.uniform1i(p.uniforms.uOrig!, 2)
 
-    const xf = buildTransform(this.srcW, this.srcH, edit.geometry)
-    const frame = cropFrame(this.srcW, this.srcH, edit.geometry)
+    const xf = buildTransform(this.srcW, this.srcH, edit.geometry, opts.view ?? 'edit')
     gl.uniformMatrix3fv(p.uniforms.uXf!, false, xf)
-    // Match the mip level to the downscale so 12 MP files do not alias at 1440 px.
-    gl.uniform1f(p.uniforms.uLod!, Math.max(0, Math.log2(frame.cw / outW)))
-    const steps = pixelSteps(xf, outW, outH)
-    gl.uniform2f(p.uniforms.uDx!, steps.dx[0], steps.dx[1])
-    gl.uniform2f(p.uniforms.uDy!, steps.dy[0], steps.dy[1])
     gl.uniform2f(p.uniforms.uOutSize!, outW, outH)
+    gl.uniform2f(p.uniforms.uSrcSize!, this.srcW, this.srcH)
     gl.uniform1f(p.uniforms.uAspect!, outW / outH)
     gl.uniform1f(p.uniforms.uSplit!, opts.split ?? -1)
 

@@ -1,11 +1,13 @@
 import { useState, type ReactNode } from 'react'
 import { describeAuto } from '../engine/auto'
+import { aspectRatio, centredCrop, framedSize } from '../engine/geometry'
 import { RANGES } from '../engine/presets'
 import type { Adjustments, AspectKey, Geometry } from '../engine/types'
-import { ASPECT_RATIOS } from '../engine/types'
+import { FULL_RECT } from '../engine/types'
 import type { Photo } from '../state/photos'
 import { Histogram } from './Histogram'
 import { Slider } from './Slider'
+import type { Tool } from './Stage'
 
 type Tab = 'light' | 'colour' | 'detail' | 'frame'
 
@@ -17,6 +19,7 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 const ASPECTS: { key: AspectKey; label: string }[] = [
+  { key: 'free', label: 'Free' },
   { key: 'original', label: 'Orig' },
   { key: '1:1', label: '1:1' },
   { key: '4:5', label: '4:5' },
@@ -30,16 +33,19 @@ const ASPECTS: { key: AspectKey; label: string }[] = [
 const ev = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(2)} EV`
 const deg = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}°`
 const pctSigned = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}`
-const times = (v: number) => `${v.toFixed(2)}×`
 
 export function AdjustPanel({
   photo,
+  tool,
+  onTool,
   onAdjust,
   onGeometry,
   onResetFraming,
   footer,
 }: {
   photo: Photo
+  tool: Tool
+  onTool: (t: Tool) => void
   onAdjust: (patch: Partial<Adjustments>) => void
   onGeometry: (patch: Partial<Geometry>) => void
   onResetFraming: () => void
@@ -63,6 +69,14 @@ export function AdjustPanel({
         onReset={() => onAdjust({ [key]: 0 } as Partial<Adjustments>)}
       />
     )
+  }
+
+  /** Picking a shape re-centres the crop at the largest rectangle that fits. */
+  const chooseAspect = (key: AspectKey) => {
+    const [fw, fh] = framedSize(photo.preview.width, photo.preview.height, g)
+    const ratio = aspectRatio(key, fw, fh)
+    onGeometry({ aspect: key, crop: centredCrop(ratio, fw, fh) })
+    if (tool !== 'crop') onTool('crop')
   }
 
   return (
@@ -144,19 +158,45 @@ export function AdjustPanel({
         {tab === 'frame' && (
           <>
             <div className="group">
+              <h3 className="group-title">Tools</h3>
+              <div className="icon-row">
+                <button
+                  className="btn"
+                  style={{ flex: 1 }}
+                  aria-pressed={tool === 'crop'}
+                  onClick={() => onTool(tool === 'crop' ? 'adjust' : 'crop')}
+                >
+                  Crop
+                </button>
+                <button
+                  className="btn"
+                  style={{ flex: 1 }}
+                  aria-pressed={tool === 'perspective'}
+                  onClick={() => onTool(tool === 'perspective' ? 'adjust' : 'perspective')}
+                >
+                  Perspective
+                </button>
+              </div>
+            </div>
+
+            <div className="group">
               <h3 className="group-title">Orientation</h3>
               <div className="icon-row">
                 <button
                   className="icon-btn"
                   title="Rotate left"
-                  onClick={() => onGeometry({ rotate90: (((g.rotate90 + 3) % 4) as Geometry['rotate90']) })}
+                  onClick={() =>
+                    onGeometry({ rotate90: ((g.rotate90 + 3) % 4) as Geometry['rotate90'] })
+                  }
                 >
                   ↺
                 </button>
                 <button
                   className="icon-btn"
                   title="Rotate right"
-                  onClick={() => onGeometry({ rotate90: (((g.rotate90 + 1) % 4) as Geometry['rotate90']) })}
+                  onClick={() =>
+                    onGeometry({ rotate90: ((g.rotate90 + 1) % 4) as Geometry['rotate90'] })
+                  }
                 >
                   ↻
                 </button>
@@ -169,66 +209,95 @@ export function AdjustPanel({
                   ⇄
                 </button>
               </div>
+              <Slider
+                label="Straighten"
+                value={g.straighten}
+                min={-20}
+                max={20}
+                step={0.1}
+                display={deg}
+                onChange={(v) => onGeometry({ straighten: v })}
+                onReset={() => onGeometry({ straighten: 0 })}
+              />
             </div>
 
             <div className="group">
               <h3 className="group-title">Crop shape</h3>
-              <div className="aspect-grid">
+              <div className="aspect-grid three">
                 {ASPECTS.map(({ key, label }) => {
                   const ratio =
-                    key === 'original'
-                      ? photo.nativeWidth / photo.nativeHeight
-                      : ASPECT_RATIOS[key]
+                    key === 'free'
+                      ? 1.35
+                      : key === 'original'
+                        ? photo.nativeWidth / photo.nativeHeight
+                        : aspectRatio(key, 1, 1)!
                   return (
                     <button
                       key={key}
-                      className="aspect-btn"
+                      className={`aspect-btn${key === 'free' ? ' free' : ''}`}
                       aria-pressed={g.aspect === key}
-                      onClick={() => onGeometry({ aspect: key })}
+                      onClick={() => chooseAspect(key)}
                     >
                       <span
                         className="shape"
-                        style={{ aspectRatio: String(ratio), width: ratio >= 1 ? 15 : 'auto', height: ratio >= 1 ? 'auto' : 15 }}
+                        style={{
+                          aspectRatio: String(ratio),
+                          width: ratio >= 1 ? 16 : 'auto',
+                          height: ratio >= 1 ? 'auto' : 16,
+                        }}
                       />
                       {label}
                     </button>
                   )
                 })}
               </div>
-            </div>
-
-            <div className="group">
-              <h3 className="group-title">Adjust</h3>
-              <Slider
-                label="Straighten"
-                value={g.straighten}
-                min={-15}
-                max={15}
-                step={0.1}
-                display={deg}
-                onChange={(v) => onGeometry({ straighten: v })}
-                onReset={() => onGeometry({ straighten: 0 })}
-              />
-              <Slider
-                label="Zoom"
-                value={g.zoom}
-                min={1}
-                max={3}
-                step={0.01}
-                bipolar={false}
-                display={times}
-                onChange={(v) => onGeometry({ zoom: v })}
-                onReset={() => onGeometry({ zoom: 1, offsetX: 0, offsetY: 0 })}
-              />
-              <button className="btn btn-sm" style={{ width: '100%' }} onClick={onResetFraming}>
-                Reset framing
+              <button
+                className="btn btn-sm"
+                style={{ width: '100%' }}
+                onClick={() => onGeometry({ crop: { ...FULL_RECT } })}
+              >
+                Fill the frame
               </button>
             </div>
 
-            <p className="auto-notes">
-              When the crop is tighter than the frame you can <b>drag the photo</b> to choose what
-              stays in.
-            </p>
+            <div className="group">
+              <h3 className="group-title">Perspective</h3>
+              <Slider
+                label="Vertical"
+                value={g.tiltV}
+                min={-1}
+                max={1}
+                display={pctSigned}
+                onChange={(v) => onGeometry({ tiltV: v })}
+                onReset={() => onGeometry({ tiltV: 0 })}
+              />
+              <Slider
+                label="Horizontal"
+                value={g.tiltH}
+                min={-1}
+                max={1}
+                display={pctSigned}
+                onChange={(v) => onGeometry({ tiltH: v })}
+                onReset={() => onGeometry({ tiltH: 0 })}
+              />
+              <button
+                className="btn btn-sm"
+                style={{ width: '100%' }}
+                disabled={!g.corners && g.tiltV === 0 && g.tiltH === 0}
+                onClick={() => onGeometry({ corners: null, tiltV: 0, tiltH: 0 })}
+              >
+                Clear perspective
+              </button>
+              <p className="auto-notes" style={{ marginTop: 12 }}>
+                The sliders handle a gentle lean. For a photo taken properly off to one side, use
+                the <b>Perspective</b> tool and put the four corners on something that is really a
+                rectangle.
+              </p>
+            </div>
+
+            <button className="btn btn-sm" style={{ width: '100%' }} onClick={onResetFraming}>
+              Reset all framing
+            </button>
           </>
         )}
       </div>
