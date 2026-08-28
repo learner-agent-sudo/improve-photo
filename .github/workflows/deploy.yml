@@ -1,13 +1,21 @@
-# Publishes the built site to GitHub Pages on every push to main.
+# Publishes the BUILT site to GitHub Pages.
 #
-# One-time setup, in the browser: repository Settings -> Pages -> "Build and
-# deployment" -> Source: "GitHub Actions". Nothing else to configure, and no
-# account anywhere else. The site is entirely static, so this costs nothing.
+# One-time setup, in the browser:
+#   Settings -> Pages -> "Build and deployment" -> Source: "GitHub Actions"
+#
+# That setting matters more than it looks. Left on the default "Deploy from a
+# branch", Pages serves the repository root verbatim - and the root index.html
+# is the Vite *source* entry, which points at /src/main.tsx. A browser cannot
+# execute TypeScript, so the page loads and renders nothing at all. The site
+# has to be built first, and this workflow is what builds it.
 name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # This repository's default branch, plus main for when work is merged there.
+    branches:
+      - main
+      - claude/zen-planck-8cyrm7
   workflow_dispatch:
 
 permissions:

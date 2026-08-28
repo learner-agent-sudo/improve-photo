@@ -43,14 +43,23 @@ The output in `dist/` is plain static files. Any static host will serve it.
 ## Publishing it
 
 A GitHub Actions workflow is included at
-[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). To turn it on:
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
 
-1. Push to `main`.
-2. In the repository, go to **Settings → Pages**.
-3. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+**There is one setting you must change, and the site will not work until you
+do.** In the repository, go to **Settings → Pages**, and under **Build and
+deployment** set **Source** to **GitHub Actions** (not the default, "Deploy from
+a branch").
 
-Every push to `main` then rebuilds and publishes the site. Nothing to pay for,
-nothing else to sign up to.
+Why it matters: "Deploy from a branch" serves the repository root exactly as it
+is committed. The root `index.html` is the Vite *source* entry — it points at
+`/src/main.tsx`, which is TypeScript that no browser can execute, at an absolute
+path that is wrong for a project subpath. The result is a page that loads and
+renders nothing: a white screen with no error. The site has to be built first,
+and only the Actions source does that.
+
+Once the source is set to GitHub Actions, every push to the default branch (or
+to `main`) rebuilds and republishes. Nothing to pay for, nothing else to sign up
+to. The URL does not change when you switch.
 
 If you later want a custom domain and faster global delivery, Cloudflare Pages
 or Netlify will both build this repository with zero configuration — the build
