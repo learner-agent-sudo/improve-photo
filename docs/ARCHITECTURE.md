@@ -227,6 +227,77 @@ file matches what was approved on screen.
 
 ---
 
+## The AI review, and why it proposes numbers rather than pixels
+
+The optional Gemini integration is built on one decision: **the model is an eye,
+not a pair of hands.** It receives a 768&nbsp;px JPEG plus the measurements
+Darkroom already took, and returns target slider values with reasons. The
+existing GPU pipeline then does the work at full resolution.
+
+The obvious alternative was to send the photo to an image-generation model and
+display whatever came back. It was rejected for four reasons, in order of how
+much they matter here:
+
+1. **It invents.** Generation models redraw the frame. On a plate of food that
+   means garnish that was never there; on a menu or a shopfront it means text
+   that no longer says what it said. For photos representing a real meal at a
+   real business, that is a misrepresentation risk, not a feature.
+2. **Resolution.** Current image models cap output well below the
+   1080&nbsp;px&nbsp;×&nbsp;1440&nbsp;px that Xiaohongshu wants, so the result
+   would have to be upscaled — undoing the point of the exercise.
+3. **Reviewability.** "Here is a different picture" cannot be approved
+   line-by-line. A list of slider moves can, and it undoes in one step.
+4. **Privacy.** The slider route needs one small copy of the photo, once, only
+   when asked. It keeps the default "nothing leaves this device" property
+   intact, with a single clearly-marked exception.
+
+The same reasoning caps what it may suggest. It can move the thirteen tone,
+colour and detail sliders, and it can suggest a straighten angle. It may
+**flag** that a photo was shot off-axis, but it is explicitly forbidden from
+returning perspective corner coordinates: a vision model's guess at four corner
+pixels is rough, and a wrong quadrilateral actively distorts the photo, which is
+worse than no suggestion at all.
+
+### Treating the response as hostile
+
+Everything that comes back is untrusted input, and is handled that way in
+`src/ai/gemini.ts`:
+
+- slider names not on the allowlist are dropped (including `__proto__` and
+  `constructor`)
+- values must be a real number or a numeric string. `null`, `''`, `[]` and
+  `false` are rejected rather than coerced — `Number(null)` is `0`, which would
+  otherwise read as a deliberate request for zero
+- every value is clamped to that slider's actual range, and the overshoot is
+  shown to the user rather than hidden
+- duplicate keys collapse, arrays are capped, strings are stripped of control
+  characters and truncated
+
+This is also the whole answer to prompt injection. A photo of a sign reading
+"ignore your instructions" can, at absolute worst, move a slider to a value it
+was already allowed to take. There is no tool call, no file access and no
+network reachable from the model's output. Text it returns is rendered by React
+as text, never as markup.
+
+### Why a proxy, and not just a key in the page
+
+Two independent problems, one answer:
+
+- **CORS.** A browser cannot reliably call `generativelanguage.googleapis.com`.
+  The request is a cross-origin POST with a JSON content type, so it requires a
+  preflight, and Google does not support one for this API.
+- **Key exposure.** A static site has no secrets. Any key it holds is readable
+  from the network tab, and Google bills the key's owner. Google's own guidance
+  is to run a backend proxy.
+
+`proxy/cloudflare-worker.js` is that proxy: about 60 lines, no build step, key
+held as a Worker secret, origin allowlist, optional shared token, and a strict
+`[a-zA-Z0-9._-]` check on the model id so it cannot be used to reach a different
+path on Google's API. Direct mode remains available for local experimentation
+and says plainly what it costs you.
+
+---
+
 ## Stage 2: the collage builder
 
 The goal: take the nine dish photos from one meal and compose them into one or
@@ -355,6 +426,13 @@ Storage and hosting:
 - [GitHub Docs — About large files on GitHub](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github)
 - [Supabase pricing](https://supabase.com/pricing)
 - [Cloudflare R2 pricing](https://developers.cloudflare.com/r2/pricing/)
+
+AI:
+
+- [Google AI for Developers — Using Gemini API keys](https://ai.google.dev/gemini-api/docs/api-key)
+  ("Never expose keys client-side in production... run a backend proxy server")
+- [Cloudflare Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
+- [Google AI Studio — get an API key](https://aistudio.google.com/apikey)
 
 Image processing:
 

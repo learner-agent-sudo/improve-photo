@@ -102,6 +102,78 @@ Seven presets sit on top of Auto rather than replacing it — Auto fixes what is
 objectively wrong with the file, the preset applies the taste. So *Dish* behaves
 sensibly whether the shot was taken in daylight or under restaurant tungsten.
 
+## AI review (optional, off by default)
+
+Darkroom can ask Google's Gemini for a second opinion. It is off until you turn
+it on, and it never changes anything by itself.
+
+Press **Ask AI** and you get a written diagnosis plus a list of proposed slider
+moves, each with the current value beside the suggested one and a one-line
+reason. Tick the ones you agree with, ignore the rest, press Apply. It lands as
+a single undo step, so one `Ctrl+Z` puts the photo back exactly as it was.
+
+### What it does *not* do
+
+It does not redraw your photo. The model proposes numbers; Darkroom's own GPU
+pipeline does the work, at full resolution, from your original pixels.
+
+That was a deliberate choice over handing the photo to an image-generation model
+and getting a new picture back. Those models invent detail, mangle text on a
+menu or a sign, and cap their output at around 1–2K — below the 1080&nbsp;px
+Xiaohongshu actually wants. For photos representing a real meal at a real
+restaurant, a picture of food that was never on the plate is a problem, not a
+feature. Proposing slider values keeps every pixel yours and every change
+reversible.
+
+For the same reason it will *flag* that a photo looks shot off-axis but will not
+guess the four corners: a wrong quadrilateral actively distorts the picture,
+which is worse than no suggestion. You place them with the Perspective tool,
+which is precise.
+
+### What leaves your device
+
+Only when you press Ask AI, and only this:
+
+- a copy of the photo shrunk to 768&nbsp;px on the long edge, as a JPEG
+- the numbers Darkroom measured from it (histogram percentiles, noise sigma,
+  clipping)
+
+The full-resolution file never leaves. Nothing is sent at any other time, and
+with AI switched off nothing is sent at all. Once it reaches Google, Google's
+terms govern what happens to it — so if a photo is confidential, leave this off.
+
+### Setting it up
+
+**The recommended way is the proxy**, for two reasons that are both real:
+
+1. **A key in a static site is a public key.** This app has no server. Anything
+   it holds, anyone can read out of the browser's network tab — and Google bills
+   *you*. Google's own guidance is blunt: *"Never expose keys client-side in
+   production... run a backend proxy server to make the actual API calls."*
+2. **Browsers cannot reliably call the Gemini API directly.** It needs a CORS
+   preflight that Google does not answer, so the request is often simply
+   blocked.
+
+[`proxy/cloudflare-worker.js`](proxy/cloudflare-worker.js) solves both. It is
+about 60 lines, deploys by pasting it into the Cloudflare dashboard, holds the
+key as a secret, and only accepts requests from the site you name. Cloudflare's
+free plan covers 100,000 requests a day. The file starts with step-by-step
+instructions.
+
+**Direct mode** is offered for a quick try on your own machine. The key is kept
+in this browser's local storage and never committed — but any script on the page
+could read it, so use a key with billing off and restrict it to your site in
+Google Cloud. Expect the browser to block the call.
+
+Model ids are editable, because Google retires them on a schedule.
+
+### Cost
+
+Each review sends one small image and gets a few hundred tokens back. On the
+free tier this is free but rate-limited to a handful of requests a minute; on a
+paid key it is a fraction of a cent per photo. Reviewing nine dishes is nine
+requests.
+
 ## Framing: crop, straighten, and fixing the angle
 
 Three tools share the stage, switched with the pill above the image or with the
@@ -246,9 +318,15 @@ src/
     renderer.ts    WebGL2 pipeline
     targets.ts     export sizes per platform
     export.ts      full-resolution render and encode
+  ai/              optional Gemini review - proposes slider values, never pixels
+    types.ts       the proposal shape, and which sliders the model may touch
+    gemini.ts      request building, and hard validation of whatever comes back
+    settings.ts    local-only configuration
   state/
     photos.ts      loading, memory strategy, re-decoding for export
   components/      the interface
+proxy/
+  cloudflare-worker.js   keeps the API key off the page, and works around CORS
 ```
 
 `src/engine` is deliberately free of any UI. Stage 2 renders every collage tile

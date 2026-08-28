@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from 'react'
+import type { AiSettings, ProposedChange } from '../ai/types'
+import { AiPanel } from './AiPanel'
 import { describeAuto } from '../engine/auto'
 import { aspectRatio, centredCrop, framedSize } from '../engine/geometry'
 import { RANGES } from '../engine/presets'
@@ -41,6 +43,9 @@ export function AdjustPanel({
   onAdjust,
   onGeometry,
   onResetFraming,
+  aiSettings,
+  onOpenAiSettings,
+  onApplyAi,
   footer,
 }: {
   photo: Photo
@@ -49,6 +54,9 @@ export function AdjustPanel({
   onAdjust: (patch: Partial<Adjustments>) => void
   onGeometry: (patch: Partial<Geometry>) => void
   onResetFraming: () => void
+  aiSettings: AiSettings
+  onOpenAiSettings: () => void
+  onApplyAi: (changes: ProposedChange[], straighten?: number) => void
   footer?: ReactNode
 }) {
   const [tab, setTab] = useState<Tab>('light')
@@ -104,6 +112,14 @@ export function AdjustPanel({
               <br />
               {describeAuto(photo.analysis, photo.auto).join(' · ')}
             </p>
+
+            <AiPanel
+              photo={photo}
+              settings={aiSettings}
+              onOpenSettings={onOpenAiSettings}
+              onApply={onApplyAi}
+            />
+
             <div className="group">
               <h3 className="group-title">Tone</h3>
               {bind('exposure', 'Exposure', ev)}

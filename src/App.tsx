@@ -6,6 +6,9 @@ import { Filmstrip } from './components/Filmstrip'
 import { Hero } from './components/Hero'
 import { Stage, type Tool } from './components/Stage'
 import { Toasts, type Toast } from './components/Toasts'
+import { AiSettingsDialog } from './components/AiSettingsDialog'
+import { loadAiSettings, saveAiSettings } from './ai/settings'
+import type { AiSettings, ProposedChange } from './ai/types'
 import { Exporter, saveBlob } from './engine/export'
 import { aspectRatio, centredCrop, framedSize } from './engine/geometry'
 import { applyPreset, PRESETS } from './engine/presets'
@@ -37,6 +40,8 @@ export default function App() {
   const [photos, setPhotos] = useState<Photo[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [tool, setTool] = useState<Tool>('adjust')
+  const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings())
+  const [aiDialog, setAiDialog] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   const [config, setConfig] = useState<ExportConfig>({
@@ -357,6 +362,39 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedId, step])
 
+  const updateAiSettings = useCallback((patch: Partial<AiSettings>) => {
+    setAiSettings((prev) => {
+      const next = { ...prev, ...patch }
+      saveAiSettings(next)
+      return next
+    })
+  }, [])
+
+  /**
+   * Applies an approved AI proposal as one undoable step, so a single Ctrl+Z
+   * puts the photo back exactly as it was.
+   */
+  const applyAiProposal = useCallback(
+    (changes: ProposedChange[], straighten?: number) => {
+      patchEdit('ai:apply', (e) => {
+        const adjustments = { ...e.adjustments }
+        for (const c of changes) adjustments[c.key] = c.value
+        return {
+          ...e,
+          adjustments,
+          geometry: straighten === undefined ? e.geometry : { ...e.geometry, straighten },
+        }
+      })
+      setPhotos((prev) => prev.map((p) => (p.id === selectedId ? { ...p, presetId: 'custom' } : p)))
+      const bits = [
+        changes.length ? `${changes.length} change${changes.length > 1 ? 's' : ''}` : '',
+        straighten === undefined ? '' : 'straighten',
+      ].filter(Boolean)
+      notify('ok', `Applied ${bits.join(' and ')}.`)
+    },
+    [patchEdit, selectedId, notify],
+  )
+
   const selectPhoto = useCallback((id: string) => {
     setSelectedId(id)
     setTool('adjust')
@@ -458,6 +496,9 @@ export default function App() {
             onAdjust={markCustom}
             onGeometry={onGeometry}
             onResetFraming={onResetFraming}
+            aiSettings={aiSettings}
+            onOpenAiSettings={() => setAiDialog(true)}
+            onApplyAi={applyAiProposal}
             footer={
               <ExportPanel
                 photo={selected}
@@ -471,6 +512,14 @@ export default function App() {
             }
           />
         </div>
+      )}
+
+      {aiDialog && (
+        <AiSettingsDialog
+          settings={aiSettings}
+          onChange={updateAiSettings}
+          onClose={() => setAiDialog(false)}
+        />
       )}
 
       <Toasts toasts={toasts} onDismiss={dismiss} />
