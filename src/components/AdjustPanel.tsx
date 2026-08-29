@@ -46,6 +46,8 @@ export function AdjustPanel({
   aiSettings,
   onOpenAiSettings,
   onApplyAi,
+  collapsed,
+  onExpand,
   footer,
 }: {
   photo: Photo
@@ -57,6 +59,8 @@ export function AdjustPanel({
   aiSettings: AiSettings
   onOpenAiSettings: () => void
   onApplyAi: (changes: ProposedChange[], straighten?: number) => void
+  collapsed?: boolean
+  onExpand?: () => void
   footer?: ReactNode
 }) {
   const [tab, setTab] = useState<Tab>('light')
@@ -88,7 +92,7 @@ export function AdjustPanel({
   }
 
   return (
-    <aside className="panel">
+    <aside className={`panel${collapsed ? ' collapsed' : ''}`}>
       <div className="tabs" role="tablist">
         {TABS.map((t) => (
           <button
@@ -96,11 +100,21 @@ export function AdjustPanel({
             className="tab"
             role="tab"
             aria-selected={tab === t.id}
-            onClick={() => setTab(t.id)}
+            onClick={() => {
+              setTab(t.id)
+              onExpand?.()
+            }}
           >
             {t.label}
           </button>
         ))}
+        <button
+          className="sheet-handle"
+          onClick={onExpand}
+          aria-label={collapsed ? 'Show controls' : 'Hide controls'}
+        >
+          {collapsed ? '\u2303' : '\u2304'}
+        </button>
       </div>
 
       <div className="panel-body">

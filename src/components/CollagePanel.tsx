@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import {
   aspectValue,
+  autoLayout,
   layoutsFor,
   type Cell,
   type CollageDoc,
@@ -65,6 +66,8 @@ export function CollagePanel({
   onClearAll,
   onClearCell,
   onAddText,
+  collapsed,
+  onExpand,
   footer,
 }: {
   doc: CollageDoc
@@ -79,6 +82,8 @@ export function CollagePanel({
   onClearAll: () => void
   onClearCell: (i: number) => void
   onAddText: () => void
+  collapsed?: boolean
+  onExpand?: () => void
   footer?: ReactNode
 }) {
   const [tab, setTab] = useState<Tab>('layout')
@@ -93,7 +98,7 @@ export function CollagePanel({
     )
 
   return (
-    <aside className="panel">
+    <aside className={`panel${collapsed ? ' collapsed' : ''}`}>
       <div className="tabs" role="tablist">
         {(['layout', 'style', 'text'] as Tab[]).map((t) => (
           <button
@@ -101,12 +106,22 @@ export function CollagePanel({
             className="tab"
             role="tab"
             aria-selected={tab === t}
-            onClick={() => setTab(t)}
+            onClick={() => {
+              setTab(t)
+              onExpand?.()
+            }}
             style={{ textTransform: 'capitalize' }}
           >
             {t}
           </button>
         ))}
+        <button
+          className="sheet-handle"
+          onClick={onExpand}
+          aria-label={collapsed ? 'Show controls' : 'Hide controls'}
+        >
+          {collapsed ? '\u2303' : '\u2304'}
+        </button>
       </div>
 
       <div className="panel-body">
@@ -148,7 +163,7 @@ export function CollagePanel({
                   onClick={() => onLayout('auto')}
                   title={`Fitted to ${photoCount} photo${photoCount === 1 ? '' : 's'}`}
                 >
-                  <LayoutThumb cells={doc.layoutId === 'auto' ? doc.cells : []} aspect={aspect} />
+                  <LayoutThumb cells={autoLayout(Math.max(photoCount, 1), aspect)} aspect={aspect} />
                   <span>Auto</span>
                 </button>
                 {layouts.map((l) => (

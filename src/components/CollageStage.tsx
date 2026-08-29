@@ -1,27 +1,35 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { aspectValue, type CollageDoc } from '../engine/collage'
+import { aspectValue, EMPTY_SLOT, type CollageDoc } from '../engine/collage'
 import { CollageRenderer, cellRects, measureText, type CollageSource } from '../engine/collageRender'
 
 const MAX_CANVAS_EDGE = 2200
+/** How long a finger must rest on a tile before it lifts out for swapping. */
+const LIFT_MS = 420
+/** Movement past this cancels the long press and becomes a pan. */
+const LIFT_SLOP = 9
 
-interface Drag {
-  kind: 'pan' | 'swap' | 'text'
+type Mode = 'pan' | 'lift' | 'text' | 'pinch'
+
+interface DragState {
+  mode: Mode
   index: number
   textId?: string
   startX: number
   startY: number
   baseX: number
   baseY: number
-  moved: boolean
+  baseZoom: number
+  pinchStart: number
 }
 
 /**
- * The collage canvas and everything you can do to it directly.
+ * The collage canvas.
  *
- * Dragging inside a tile pans the photo within its frame. Drag out of the tile
- * and it becomes a swap instead - the pan is rolled back and the tile you drop
- * on trades places - which is the behaviour a collage app is expected to have
- * without needing a separate mode for it.
+ * Gestures are chosen so the common one is the cheap one: a plain drag always
+ * repositions the photo inside its frame and never turns into something else
+ * halfway through. Swapping two photos is a deliberate long press, which is
+ * also the only arrangement that works on a touchscreen, where there is no
+ * hover and no right button to hang a second meaning on.
  */
 export function CollageStage({
   doc,
@@ -46,8 +54,12 @@ export function CollageStage({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const rendererRef = useRef<CollageRenderer | null>(null)
   const raf = useRef(0)
-  const drag = useRef<Drag | null>(null)
+  const drag = useRef<DragState | null>(null)
+  const liftTimer = useRef<number | undefined>(undefined)
+  const pointers = useRef(new Map<number, { x: number; y: number }>())
+
   const [box, setBox] = useState({ w: 0, h: 0 })
+  const [lifted, setLifted] = useState<number | null>(null)
   const [dropCell, setDropCell] = useState<number | null>(null)
 
   const onErrorRef = useRef(onError)
@@ -62,6 +74,7 @@ export function CollageStage({
     return () => {
       rendererRef.current?.dispose()
       rendererRef.current = null
+      window.clearTimeout(liftTimer.current)
     }
   }, [])
 
@@ -114,7 +127,7 @@ export function CollageStage({
       try {
         r.draw(ctx, doc, sources, bw, bh, {
           showPlaceholders: true,
-          selectedCell: dropCell ?? selectedCell,
+          selectedCell: dropCell ?? (lifted !== null ? lifted : selectedCell),
           selectedText,
         })
       } catch (err) {
@@ -122,7 +135,7 @@ export function CollageStage({
       }
     })
     return () => cancelAnimationFrame(raf.current)
-  }, [doc, sources, bw, bh, cssW, cssH, box.w, selectedCell, selectedText, dropCell])
+  }, [doc, sources, bw, bh, cssW, cssH, box.w, selectedCell, selectedText, dropCell, lifted])
 
   // --- hit testing -----------------------------------------------------------
   const toCanvas = useCallback(
@@ -154,41 +167,85 @@ export function CollageStage({
       const ctx = canvasRef.current?.getContext('2d')
       if (!ctx) return null
       const short = Math.min(bw, bh)
-      // Topmost first, matching what the eye picks.
       for (let i = doc.texts.length - 1; i >= 0; i--) {
         const t = doc.texts[i]
         const px = Math.max(4, t.size * short)
         const m = measureText(ctx, t.text, px, t.weight, t.font)
-        const cx = t.x * bw
-        const cy = t.y * bh
         const a = (-t.rotation * Math.PI) / 180
-        const dx = p.x - cx
-        const dy = p.y - cy
+        const dx = p.x - t.x * bw
+        const dy = p.y - t.y * bh
         const lx = dx * Math.cos(a) - dy * Math.sin(a)
         const ly = dx * Math.sin(a) + dy * Math.cos(a)
         const ox = t.align === 'center' ? -m.w / 2 : t.align === 'right' ? -m.w : 0
-        if (lx >= ox - px * 0.3 && lx <= ox + m.w + px * 0.3 && Math.abs(ly) <= m.h / 2 + px * 0.25) {
-          return t.id
-        }
+        // A generous margin, because a fingertip is far wider than a glyph.
+        const pad = Math.max(px * 0.35, 14)
+        if (lx >= ox - pad && lx <= ox + m.w + pad && Math.abs(ly) <= m.h / 2 + pad) return t.id
       }
       return null
     },
     [doc.texts, bw, bh],
   )
 
-  // --- pointer ---------------------------------------------------------------
+  // --- slot helpers ----------------------------------------------------------
+  const setSlot = useCallback(
+    (i: number, patch: Partial<(typeof doc.slots)[number]>, key: string) =>
+      onDoc({ slots: doc.slots.map((s, k) => (k === i ? { ...s, ...patch } : s)) }, key),
+    [doc.slots, onDoc],
+  )
+
+  const zoomBy = useCallback(
+    (i: number, delta: number) => {
+      const s = doc.slots[i]
+      if (!s?.photoId) return
+      setSlot(i, { zoom: Math.max(1, Math.min(4, s.zoom + delta)) }, `zoom:${i}`)
+    },
+    [doc.slots, setSlot],
+  )
+
+  const resetSlot = useCallback(
+    (i: number) => setSlot(i, { zoom: 1, offsetX: 0, offsetY: 0 }, `reset:${i}`),
+    [setSlot],
+  )
+
+  // --- pointers --------------------------------------------------------------
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       const p = toCanvas(e)
       if (!p) return
       ;(e.target as Element).setPointerCapture(e.pointerId)
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Second finger on the same tile: pinch to zoom.
+      if (pointers.current.size === 2 && drag.current && drag.current.mode !== 'text') {
+        const [a, b] = [...pointers.current.values()]
+        window.clearTimeout(liftTimer.current)
+        drag.current = {
+          ...drag.current,
+          mode: 'pinch',
+          baseZoom: doc.slots[drag.current.index]?.zoom ?? 1,
+          pinchStart: Math.hypot(a.x - b.x, a.y - b.y),
+        }
+        setLifted(null)
+        return
+      }
+      if (pointers.current.size > 1) return
 
       const tid = textAt(p)
       if (tid) {
         const t = doc.texts.find((x) => x.id === tid)!
         onSelectText(tid)
         onSelectCell(null)
-        drag.current = { kind: 'text', index: -1, textId: tid, startX: p.x, startY: p.y, baseX: t.x, baseY: t.y, moved: false }
+        drag.current = {
+          mode: 'text',
+          index: -1,
+          textId: tid,
+          startX: p.x,
+          startY: p.y,
+          baseX: t.x,
+          baseY: t.y,
+          baseZoom: 1,
+          pinchStart: 0,
+        }
         return
       }
 
@@ -198,15 +255,25 @@ export function CollageStage({
       if (i === null) return
       const slot = doc.slots[i]
       if (!slot?.photoId) return
+
       drag.current = {
-        kind: 'pan',
+        mode: 'pan',
         index: i,
         startX: p.x,
         startY: p.y,
         baseX: slot.offsetX,
         baseY: slot.offsetY,
-        moved: false,
+        baseZoom: slot.zoom,
+        pinchStart: 0,
       }
+      // Hold still and the tile lifts out, ready to trade places.
+      window.clearTimeout(liftTimer.current)
+      liftTimer.current = window.setTimeout(() => {
+        if (drag.current?.mode === 'pan' && drag.current.index === i) {
+          drag.current.mode = 'lift'
+          setLifted(i)
+        }
+      }, LIFT_MS)
     },
     [toCanvas, textAt, cellAt, doc.texts, doc.slots, onSelectCell, onSelectText],
   )
@@ -214,11 +281,27 @@ export function CollageStage({
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
       const d = drag.current
+      if (!d) return
+      if (pointers.current.has(e.pointerId)) {
+        pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      }
       const p = toCanvas(e)
-      if (!d || !p) return
-      d.moved = true
+      if (!p) return
 
-      if (d.kind === 'text') {
+      if (d.mode === 'pinch') {
+        const vals = [...pointers.current.values()]
+        if (vals.length < 2) return
+        const dist = Math.hypot(vals[0].x - vals[1].x, vals[0].y - vals[1].y)
+        const ratio = dist / Math.max(d.pinchStart, 1)
+        setSlot(
+          d.index,
+          { zoom: Math.max(1, Math.min(4, d.baseZoom * ratio)) },
+          `zoom:${d.index}`,
+        )
+        return
+      }
+
+      if (d.mode === 'text') {
         onDoc(
           {
             texts: doc.texts.map((t) =>
@@ -232,64 +315,50 @@ export function CollageStage({
         return
       }
 
-      const over = cellAt(p)
-      if (d.kind === 'pan' && over !== null && over !== d.index) {
-        // Left the tile: this is a swap, so undo the panning done so far.
-        d.kind = 'swap'
-        onDoc(
-          {
-            slots: doc.slots.map((s, i) =>
-              i === d.index ? { ...s, offsetX: d.baseX, offsetY: d.baseY } : s,
-            ),
-          },
-          'slot-pan',
-        )
-      }
-
-      if (d.kind === 'swap') {
-        setDropCell(over)
+      if (d.mode === 'lift') {
+        setDropCell(cellAt(p))
         return
       }
 
-      const rects = cellRects(doc, bw, bh)
-      const r = rects[d.index]
-      const slot = doc.slots[d.index]
-      if (!r || !slot) return
-      // Two units of offset span the whole slack, so divide by half the tile.
+      // Panning. Moving cancels the pending long press, and the drag is never
+      // reinterpreted as something else however far it travels.
+      if (Math.hypot(p.x - d.startX, p.y - d.startY) > LIFT_SLOP) {
+        window.clearTimeout(liftTimer.current)
+      }
+      const r = cellRects(doc, bw, bh)[d.index]
+      if (!r) return
       const dx = ((p.x - d.startX) / (r.w / 2)) * -1
       const dy = ((p.y - d.startY) / (r.h / 2)) * -1
-      onDoc(
+      setSlot(
+        d.index,
         {
-          slots: doc.slots.map((s, i) =>
-            i === d.index
-              ? {
-                  ...s,
-                  offsetX: Math.max(-1, Math.min(1, d.baseX + dx)),
-                  offsetY: Math.max(-1, Math.min(1, d.baseY + dy)),
-                }
-              : s,
-          ),
+          offsetX: Math.max(-1, Math.min(1, d.baseX + dx)),
+          offsetY: Math.max(-1, Math.min(1, d.baseY + dy)),
         },
         'slot-pan',
       )
     },
-    [toCanvas, cellAt, doc, bw, bh, onDoc],
+    [toCanvas, cellAt, doc, bw, bh, onDoc, setSlot],
   )
 
-  const endDrag = useCallback(
+  const endPointer = useCallback(
     (e: React.PointerEvent) => {
+      pointers.current.delete(e.pointerId)
+      window.clearTimeout(liftTimer.current)
       const d = drag.current
+      if (pointers.current.size > 0) return
       drag.current = null
+      setLifted(null)
       setDropCell(null)
-      if (!d) return
-      if (d.kind !== 'swap') return
+      if (!d || d.mode !== 'lift') return
+
       const p = toCanvas(e)
       const target = p ? cellAt(p) : null
       if (target === null || target === d.index) return
       const slots = doc.slots.slice()
-      const a = slots[d.index]
+      const tmp = slots[d.index]
       slots[d.index] = slots[target]
-      slots[target] = a
+      slots[target] = tmp
       onDoc({ slots }, 'slot-swap')
       onSelectCell(target)
     },
@@ -301,21 +370,23 @@ export function CollageStage({
       const p = toCanvas(e)
       if (!p) return
       const i = cellAt(p)
-      if (i === null || !doc.slots[i]?.photoId) return
-      const step = e.deltaY > 0 ? -0.08 : 0.08
-      onDoc(
-        {
-          slots: doc.slots.map((s, k) =>
-            k === i ? { ...s, zoom: Math.max(1, Math.min(3, s.zoom + step)) } : s,
-          ),
-        },
-        `slot-zoom:${i}`,
-      )
+      if (i === null) return
+      zoomBy(i, e.deltaY > 0 ? -0.08 : 0.08)
     },
-    [toCanvas, cellAt, doc.slots, onDoc],
+    [toCanvas, cellAt, zoomBy],
   )
 
-  // --- dropping a photo from the tray ---------------------------------------
+  const onDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      const p = toCanvas(e)
+      if (!p) return
+      const i = cellAt(p)
+      if (i !== null && doc.slots[i]?.photoId) resetSlot(i)
+    },
+    [toCanvas, cellAt, doc.slots, resetSlot],
+  )
+
+  // --- dropping a photo from the roll ---------------------------------------
   const onDragOver = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
@@ -347,26 +418,60 @@ export function CollageStage({
   )
 
   const filled = doc.slots.filter((s) => s.photoId).length
+  const activeSlot = selectedCell !== null ? doc.slots[selectedCell] : undefined
+  const showTools = !!activeSlot?.photoId
 
   return (
     <section className="stage">
       <div className="stage-canvas-wrap collage" ref={wrapRef}>
-        <div className="canvas-frame" style={{ width: cssW, height: cssH }}>
+        <div
+          className={`canvas-frame${lifted !== null ? ' lifting' : ''}`}
+          style={{ width: cssW, height: cssH }}
+        >
           <canvas
             ref={canvasRef}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
+            onPointerUp={endPointer}
+            onPointerCancel={endPointer}
             onWheel={onWheel}
+            onDoubleClick={onDoubleClick}
             onDragOver={onDragOver}
             onDragLeave={() => setDropCell(null)}
             onDrop={onDrop}
           />
         </div>
+
+        {showTools && selectedCell !== null && (
+          <div className="tile-tools" role="toolbar" aria-label="Selected frame">
+            <button className="tile-btn" onClick={() => zoomBy(selectedCell, -0.15)} aria-label="Zoom out">
+              −
+            </button>
+            <span className="tile-zoom">{(activeSlot.zoom * 100).toFixed(0)}%</span>
+            <button className="tile-btn" onClick={() => zoomBy(selectedCell, 0.15)} aria-label="Zoom in">
+              +
+            </button>
+            <span className="tile-sep" />
+            <button className="tile-btn wide" onClick={() => resetSlot(selectedCell)}>
+              Reset
+            </button>
+            <button
+              className="tile-btn wide"
+              onClick={() =>
+                onDoc(
+                  { slots: doc.slots.map((s, k) => (k === selectedCell ? { ...EMPTY_SLOT } : s)) },
+                  'clear',
+                )
+              }
+            >
+              Remove
+            </button>
+          </div>
+        )}
+
         {filled === 0 && (
           <p className="stage-hint">
-            Drag a photo from the left onto a frame, or select a frame and click a photo.
+            Tap a frame, then tap a photo below. Or drag a photo straight onto one.
           </p>
         )}
       </div>
@@ -375,10 +480,12 @@ export function CollageStage({
         <strong>Collage</strong>
         <span className="sep">/</span>
         <span>
-          {filled} of {doc.cells.length} frames filled
+          {filled} of {doc.cells.length} filled
         </span>
         <div className="topbar-spacer" />
-        <span>drag to reposition · drag out to swap · scroll to zoom</span>
+        <span className="gesture-hint">
+          drag to move the photo · pinch or scroll to zoom · hold to swap · double-tap to reset
+        </span>
       </div>
     </section>
   )

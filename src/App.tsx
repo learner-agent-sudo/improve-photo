@@ -8,6 +8,7 @@ import { Stage, type Tool } from './components/Stage'
 import { Toasts, type Toast } from './components/Toasts'
 import { AiSettingsDialog } from './components/AiSettingsDialog'
 import { loadAiSettings, saveAiSettings } from './ai/settings'
+import { applyTheme, loadTheme, NEXT_THEME, THEME_LABEL, type Theme } from './state/theme'
 import type { AiSettings, ProposedChange } from './ai/types'
 import { CollageStage } from './components/CollageStage'
 import { CollagePanel } from './components/CollagePanel'
@@ -57,7 +58,11 @@ export default function App() {
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings())
   const [aiDialog, setAiDialog] = useState(false)
 
+  const [theme, setTheme] = useState<Theme>(() => loadTheme())
   const [mode, setMode] = useState<'enhance' | 'collage'>('enhance')
+  // On a phone the controls start out of the way, so the picture gets the
+  // screen. The class is inert above the phone breakpoint.
+  const [sheetOpen, setSheetOpen] = useState(false)
   const [collage, setCollage] = useState<CollageDoc | null>(null)
   const [selectedCell, setSelectedCell] = useState<number | null>(0)
   const [selectedText, setSelectedText] = useState<string | null>(null)
@@ -369,6 +374,15 @@ export default function App() {
     },
     [config, notify],
   )
+
+  useEffect(() => {
+    applyTheme(theme)
+    if (theme !== 'system' || typeof matchMedia !== 'function') return
+    const mq = matchMedia('(prefers-color-scheme: light)')
+    const sync = () => applyTheme('system')
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [theme])
 
   // --- paste ----------------------------------------------------------------
   useEffect(() => {
@@ -723,6 +737,15 @@ export default function App() {
           </button>
         )}
 
+        <button
+          className="btn btn-sm theme-btn"
+          onClick={() => setTheme((t) => NEXT_THEME[t])}
+          title={`Appearance: ${THEME_LABEL[theme]}. Click to change.`}
+          aria-label={`Appearance: ${THEME_LABEL[theme]}`}
+        >
+          {theme === 'system' ? '◐' : theme === 'light' ? '☀' : '☾'}
+        </button>
+
         <span className="privacy-note">Runs on this device only</span>
       </header>
 
@@ -731,7 +754,7 @@ export default function App() {
           <Hero onFiles={addFiles} />
         </div>
       ) : mode === 'collage' && collage ? (
-        <div className="workspace">
+        <div className="workspace collage-mode">
           <CollageTray
             photos={photos}
             used={new Set(collage.slots.map((s) => s.photoId).filter(Boolean) as string[])}
@@ -769,6 +792,8 @@ export default function App() {
               )
             }
             onAddText={addText}
+            collapsed={!sheetOpen}
+            onExpand={() => setSheetOpen((v) => !v)}
             footer={
               <CollageExportPanel
                 doc={collage}
@@ -807,6 +832,8 @@ export default function App() {
             aiSettings={aiSettings}
             onOpenAiSettings={() => setAiDialog(true)}
             onApplyAi={applyAiProposal}
+            collapsed={!sheetOpen}
+            onExpand={() => setSheetOpen((v) => !v)}
             footer={
               <ExportPanel
                 photo={selected}

@@ -198,10 +198,19 @@ Xiaohongshu, 4:5 for Instagram, 1:1, 9:16, 4:3, 16:9.
 - click a frame, then click a photo
 - **Fill in order** does the lot, **Shuffle** rearranges
 
-**Adjusting a tile:** drag inside it to reposition the photo within its frame,
-scroll to zoom in. Drag *out* of a tile and onto another and the two swap
-places — the pan you started is rolled back, so it never leaves a half-move
-behind.
+**Adjusting a tile** — select one and a small toolbar appears on the image
+itself, so the side panel is never in the way:
+
+| | |
+| --- | --- |
+| Drag inside a tile | Move the photo within its frame. It keeps panning however far you drag — it never turns into something else halfway through. |
+| Pinch, or scroll | Zoom that photo in. At 100% a tile can only slide along one axis, because the photo exactly fills the frame in the other; zoom in and it moves freely. |
+| Double-tap | Put that tile back to how it started |
+| Press and hold, then drag | Lift the photo out and drop it on another tile to swap the two |
+
+Swapping is a deliberate long press rather than a drag-past-the-edge, because
+the edge belongs to panning — and a touchscreen has no hover or right button to
+hang a second meaning on.
 
 **Style:** the gap between photos, the border around the whole thing, corner
 rounding, and any background colour.
@@ -212,6 +221,30 @@ and a drop shadow for light text over a busy photo. Fonts are waited on before
 export, so what you download matches what you saw.
 
 Undo covers all of it. Export writes the same sizes as the single-photo mode.
+
+## On a phone
+
+The layout turns into a single column with the picture at the top, the roll
+under it within thumb reach, and the controls as a sheet at the bottom. The
+sheet starts closed — just its tabs and the export button — and slides up *over*
+the canvas when you open it rather than squeezing it, so the picture never
+changes size mid-edit. Tap a tab or the chevron to open it, the chevron again to
+close.
+
+Crop handles, perspective corners and the frame toolbar all grow on
+touchscreens, and the canvas swallows drags so the page never scrolls under
+your finger.
+
+## Light and dark
+
+The appearance button in the top bar cycles **follow the device → light → dark**,
+and the choice is remembered.
+
+Dark is the default because a neutral dark surround is the honest way to judge a
+photograph. Light mode is a warm paper rather than white, and the area
+immediately around the image stays a neutral mid-grey in both — a bright
+surround shifts how the eye reads the photo's own tone, which is why desktop
+photo applications do the same.
 
 ## Framing: crop, straighten, and fixing the angle
 
@@ -295,6 +328,8 @@ publicly. If you need the metadata kept, this tool is the wrong one.
 | `\` | Toggle the before/after wipe |
 | `Ctrl`/`Cmd` + `Z` | Undo |
 | `Ctrl`/`Cmd` + `Shift` + `Z` | Redo |
+| Double-tap a collage tile | Reset that tile's framing |
+| Long-press a collage tile | Lift it out to swap with another |
 | `↑` / `↓` | Previous / next photo |
 | `Ctrl`/`Cmd` + `V` | Paste an image from the clipboard |
 | Arrow keys | Nudge a focused perspective corner (`Shift` for bigger steps) |
@@ -365,6 +400,7 @@ src/
     collageRender.ts  composites tiles, background, gutters and text onto one canvas
   state/
     photos.ts      loading, memory strategy, re-decoding for export
+    theme.ts       light / dark / follow-the-device, stored locally
   components/      the interface
 proxy/
   cloudflare-worker.js   keeps the API key off the page, and works around CORS
