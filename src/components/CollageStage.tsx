@@ -170,7 +170,7 @@ export function CollageStage({
       for (let i = doc.texts.length - 1; i >= 0; i--) {
         const t = doc.texts[i]
         const px = Math.max(4, t.size * short)
-        const m = measureText(ctx, t.text, px, t.weight, t.font)
+        const m = measureText(ctx, t, px)
         const a = (-t.rotation * Math.PI) / 180
         const dx = p.x - t.x * bw
         const dy = p.y - t.y * bh

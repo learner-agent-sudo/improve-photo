@@ -1,5 +1,5 @@
 import { cropPixelSize, outputSize } from '../engine/geometry'
-import { TARGETS } from '../engine/targets'
+import { TARGET_GROUPS, TARGETS } from '../engine/targets'
 import type { ExportFormat } from '../engine/types'
 import type { Photo } from '../state/photos'
 
@@ -41,12 +41,17 @@ export function ExportPanel({
           value={config.targetId}
           onChange={(e) => onChange({ targetId: e.target.value })}
         >
-          {TARGETS.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name} · {t.note}
-            </option>
+          {TARGET_GROUPS.map((g) => (
+            <optgroup key={g} label={g}>
+              {TARGETS.filter((t) => t.group === g).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} · {t.note}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
+        {target.hint && <p className="field-hint">{target.hint}</p>}
       </div>
 
       <div className="field-row">

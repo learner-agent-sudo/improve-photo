@@ -591,11 +591,16 @@ export default function App() {
       y: 0.88,
       size: 0.07,
       color: '#ffffff',
-      font: 'display',
+      font: 'fraunces',
       weight: 600,
       align: 'center',
       rotation: 0,
       shadow: true,
+      italic: false,
+      uppercase: false,
+      tracking: 0,
+      style: 'plain',
+      plateColor: '#0f0e0c',
     }
     patchCollage({ texts: [...prev.texts, layer] }, 'text:add')
     setSelectedText(layer.id)

@@ -189,8 +189,11 @@ generates an arrangement for any number by splitting the canvas recursively,
 always cutting the longer way, which keeps the frames close to square whatever
 shape the canvas is.
 
-**Canvas shape** is the same set of ratios as the export targets — 3:4 for
-Xiaohongshu, 4:5 for Instagram, 1:1, 9:16, 4:3, 16:9.
+**Canvas shape** is labelled by where the picture is going rather than by its
+ratio — Xiaohongshu, IG / FB post, Square post, Reel / Story, Classic, YouTube /
+web — with the ratio underneath for anyone who thinks in ratios. Picking a shape
+also sets the export menu: the middle size it offers is exactly what that
+platform asks for, with half and double either side.
 
 **Filling frames**, whichever suits you:
 
@@ -216,11 +219,32 @@ hang a second meaning on.
 rounding, and any background colour.
 
 **Text:** add as many layers as you like. Drag them anywhere on the canvas.
-Serif, sans or mono; six colours or your own; size, weight, alignment, rotation,
-and a drop shadow for light text over a busy photo. Fonts are waited on before
-export, so what you download matches what you saw.
 
-Undo covers all of it. Export writes the same sizes as the single-photo mode.
+- **Nine typefaces**, each button previewed in its own face: Fraunces, Playfair
+  Display and DM Serif Display for something editorial; IBM Plex Sans and
+  Archivo for something plain; Anton and Bebas Neue for a poster headline;
+  Caveat for handwriting; IBM Plex Mono for a caption that looks typed.
+- **Three treatments** — Solid, Hollow (outlined, so the photo shows through)
+  and Plate (sitting on a colour block, for a price or a label).
+- Italic, all capitals, letter spacing, weight, size, alignment, rotation, a
+  drop shadow for light text over a busy photo, and twelve colours or your own.
+
+Controls that a typeface cannot honour switch themselves off rather than lying:
+Bebas Neue has only capitals, so its all-caps button greys out, and a
+single-weight face shows *"Bebas comes in one weight"* instead of a dead slider.
+
+The typefaces are **served from this site, not from Google's CDN**. That is a
+deliberate choice: `fonts.googleapis.com` is blocked in mainland China, and a
+blocked font stylesheet fails silently — all nine choices would quietly collapse
+into the same fallback and look identical. Self-hosting also means the page
+makes no third-party request at all. Each face carries its `unicode-range`, so
+the browser fetches only what it needs — about 380 KiB for the nine upright
+faces, and the italics only if you press the italic button. All nine are under
+the SIL Open Font License 1.1; see [`src/fonts/LICENSE.md`](src/fonts/LICENSE.md).
+
+Fonts are waited on before export, so what you download matches what you saw.
+
+Undo covers all of it.
 
 ## On a phone
 
@@ -299,15 +323,29 @@ the crop shape you actually want afterwards.
 
 ### Export
 
-| Target | Output |
-| --- | --- |
-| Original framing | Same shape, full resolution |
-| Xiaohongshu 3:4 | 1080 × 1440 |
-| Instagram feed 4:5 | 1080 × 1350 |
-| Square 1:1 | 1080 × 1080 |
-| Story / Reels 9:16 | 1080 × 1920 |
-| Website hero 16:9 | 1920 × 1080 |
-| Web / app asset | Original shape, 2048 px long edge |
+The export menu is grouped by where the picture is going, not by ratio, and
+each choice explains in one line what it is for:
+
+| Group | Target | Output |
+| --- | --- | --- |
+| Keep as shot | Original framing | Same shape, full resolution |
+| Xiaohongshu / RED | Xiaohongshu post | 3:4 · 1080 × 1440 |
+| Instagram | Instagram post | 4:5 · 1080 × 1350 |
+| | Instagram square | 1:1 · 1080 × 1080 |
+| | Reel or Story cover | 9:16 · 1080 × 1920 |
+| Facebook | Facebook post | 4:5 · 1080 × 1350 |
+| | Facebook square | 1:1 · 1080 × 1080 |
+| | Shared link preview | 1.91:1 · 1200 × 630 |
+| TikTok | TikTok cover | 9:16 · 1080 × 1920 |
+| Pinterest | Pinterest pin | 2:3 · 1000 × 1500 |
+| YouTube | Video thumbnail | 16:9 · 1280 × 720 |
+| Your own website | Wide banner | 16:9 · 1920 × 1080 |
+| | Page image | Original shape, 2048 px long edge |
+
+Several targets are the same pixel size — an Instagram post and a Facebook post
+are both 1080 × 1350. They are listed separately anyway, because knowing you are
+exporting *for Facebook* is more useful than remembering that Facebook wants
+4:5.
 
 JPEG, WebP or PNG, with a quality control. Sources for these dimensions are
 listed in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#sources).
@@ -390,7 +428,7 @@ src/
     geometry.ts    perspective, crop, rotate and straighten as one matrix
     shaders.ts     GLSL for the four passes
     renderer.ts    WebGL2 pipeline
-    targets.ts     export sizes per platform
+    targets.ts     export sizes, grouped and named by platform
     export.ts      full-resolution render and encode
   ai/              optional Gemini review - proposes slider values, never pixels
     types.ts       the proposal shape, and which sliders the model may touch
@@ -398,6 +436,8 @@ src/
     settings.ts    local-only configuration
     collage.ts     stage 2: layouts, the auto-split generator, per-tile framing
     collageRender.ts  composites tiles, background, gutters and text onto one canvas
+  fonts.css        the nine self-hosted typefaces
+  fonts/           their woff2 subsets, and the OFL licence
   state/
     photos.ts      loading, memory strategy, re-decoding for export
     theme.ts       light / dark / follow-the-device, stored locally

@@ -1,3 +1,5 @@
+@import './fonts.css';
+
 /* ==========================================================================
    Darkroom
    --------------------------------------------------------------------------
@@ -181,6 +183,7 @@
 * { box-sizing: border-box; }
 
 html, body, #root { height: 100%; }
+html, body { max-width: 100%; overflow-x: hidden; }
 
 body {
   margin: 0;
@@ -244,6 +247,7 @@ button { cursor: pointer; background: none; border: none; padding: 0; }
   display: grid;
   grid-template-columns: var(--strip-w) minmax(0, 1fr) var(--panel-w);
   min-height: 0;
+  min-width: 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -254,6 +258,7 @@ button { cursor: pointer; background: none; border: none; padding: 0; }
   display: flex;
   align-items: center;
   gap: 22px;
+  min-width: 0;
   padding: 0 16px 0 20px;
   border-bottom: 1px solid var(--line-soft);
   background: linear-gradient(var(--ink-900), var(--ink-850));
@@ -366,6 +371,11 @@ button { cursor: pointer; background: none; border: none; padding: 0; }
   gap: 6px;
   flex-wrap: wrap;
   align-items: center;
+  /* Without this, the row's automatic minimum size is the full width of all
+     its chips, so it refuses to shrink, widens the top bar past the screen and
+     the phone zooms the entire page out to fit. overflow-x is powerless until
+     the item is actually allowed to be narrower than its content. */
+  min-width: 0;
 }
 
 .chip {
@@ -807,7 +817,9 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
 }
 
 .aspect-btn {
-  height: 46px;
+  height: 58px;
+  min-width: 0;
+  padding: 0 4px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--ink-800);
@@ -818,7 +830,7 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 3px;
   transition: all 0.14s;
 }
 .aspect-btn:hover { color: var(--paper-2); background: var(--ink-700); }
@@ -828,6 +840,18 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
   border-radius: 1.5px;
   width: 15px;
 }
+/* The shape buttons say where the picture is going, not just its ratio - the
+   number underneath is for people who already think in ratios. */
+.aspect-use {
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aspect-ratio { font-size: 8.5px; opacity: 0.6; letter-spacing: 0.06em; }
 
 /* Export ------------------------------------------------------------------ */
 
@@ -1079,15 +1103,17 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
 
   .workspace { grid-template-columns: 1fr; grid-template-rows: auto minmax(320px, 58vh) auto; }
 
+  /* Wrap rather than scroll sideways. A horizontal strip saves a row but
+     hides half the presets behind a gesture with no affordance, and a control
+     you cannot see is a control you do not have. */
   .chip-row {
-    flex-wrap: nowrap;
-    overflow-x: auto;
+    flex-wrap: wrap;
     width: 100%;
+    min-width: 0;
+    flex: 1 1 100%;
     order: 2;
-    padding-bottom: 2px;
-    scrollbar-width: none;
+    gap: 5px;
   }
-  .chip-row::-webkit-scrollbar { display: none; }
   .chip { flex: none; }
 
   .strip { border-right: none; border-bottom: 1px solid var(--line-soft); }
@@ -1687,6 +1713,52 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
   color: var(--amber-text);
 }
 
+/* Typography picker ------------------------------------------------------- */
+
+.sub-title {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--paper-4);
+  margin: 14px 0 7px;
+}
+
+.font-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.font-btn {
+  min-width: 0;
+  height: 42px;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--ink-800);
+  color: var(--paper-3);
+  font-size: 15px;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: all 0.14s;
+}
+.font-btn:hover { background: var(--ink-700); color: var(--paper); }
+.font-btn[aria-pressed='true'] {
+  border-color: var(--amber-dim);
+  background: var(--amber-wash-2);
+  color: var(--amber-text);
+}
+
+.icon-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.icon-btn:disabled:hover { background: var(--ink-800); color: var(--paper-3); }
+
 .thumb.tray { cursor: grab; }
 .thumb.tray:active { cursor: grabbing; }
 .thumb.tray.used { opacity: 0.55; }
@@ -1826,7 +1898,8 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
   .layout-btn { min-height: 52px; }
   .swatch { width: 34px; height: 34px; }
   .icon-btn { height: 42px; }
-  .aspect-btn { height: 54px; }
+  .font-btn { height: 50px; }
+  .aspect-btn { height: 62px; }
   .chip { height: 32px; padding: 0 13px; }
   .tile-btn { min-width: 40px; height: 40px; }
   .tile-tools { bottom: 8px; }
@@ -1880,3 +1953,10 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
   line-height: 1;
 }
 .sheet-handle:hover { color: var(--paper); background: var(--ink-850); }
+
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--paper-4);
+}

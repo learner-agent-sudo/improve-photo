@@ -361,6 +361,42 @@ the export rather than drifting. Export awaits `document.fonts.ready` first: an
 export that raced the web-font load would silently fall back to a system serif
 and not match the screen.
 
+`FONTS` in `collage.ts` is the single description of each typeface — its CSS
+stack, its weight range (`null` for a single-weight family), whether it has a
+real italic, and whether it is capitals-only. Both the picker and the renderer
+read it, which is why the interface can refuse what a face cannot do rather than
+faking it: Bebas Neue's all-caps button is disabled because the face has no
+lowercase to switch away from, and a single-weight family shows a sentence in
+place of a weight slider that would do nothing. `fontShorthand()` builds the
+canvas `font` string from the same table, so the panel preview, the on-canvas
+render and the export cannot disagree.
+
+Drawing order inside `drawText()` matters: the plate is filled *before* the
+shadow is turned on, so the shadow belongs to the letters and not to the block
+behind them. Filling the plate with the shadow already set would put a smudge
+behind a solid rectangle, which is visible at export resolution and not what
+anyone means by a drop shadow.
+
+#### The typefaces are self-hosted, and that is a correctness decision
+
+`src/fonts.css` carries `@font-face` rules pointing at woff2 files in
+`src/fonts/`, which Vite fingerprints into the build. Loading them from Google's
+CDN instead would be less code and less repository weight, and it would be
+wrong: `fonts.googleapis.com` and `fonts.gstatic.com` are blocked by the Great
+Firewall, and a blocked font stylesheet does not raise an error — it times out.
+The nine typefaces would all resolve to the same fallback, so a picker offering
+nine visibly different choices would render nine identical ones, and the page
+would stall for the browser's connect timeout first. For a tool whose main
+target is Xiaohongshu, that is the wrong failure to ship.
+
+Self-hosting also removes the only third-party request the page made. The cost
+is about 1.1 MiB in the repository; the runtime cost is much smaller, because
+each `@font-face` keeps the `unicode-range` Google published for it, so a
+browser fetches a file only when a glyph actually needs it — roughly 380 KiB for
+the nine upright latin faces, with italics and latin-ext arriving only on
+demand. All nine are OFL 1.1, which permits exactly this redistribution;
+`src/fonts/LICENSE.md` carries the licence and the copyright holders.
+
 ### What is deliberately not there
 
 - **Stickers, frames and filters on top of the collage.** Stage 1 already
@@ -375,9 +411,24 @@ Export dimensions:
 - Xiaohongshu / RED 3:4 covers at 1080 × 1440 —
   [LinkBloom, Xiaohongshu image size guide](https://indiefount.cloud/resources/xiaohongshu-image-size-guide),
   [insMind, Xiaohongshu template size guide](https://www.insmind.com/blog/xiaohongshu-template-size-guide)
-- Instagram portrait feed 4:5 at 1080 × 1350 —
+- Instagram portrait feed 4:5 at 1080 × 1350, Stories and Reels 9:16 at
+  1080 × 1920 —
   [Buffer, Instagram image size guide](https://buffer.com/resources/instagram-image-size/),
   [Hootsuite, social media image sizes](https://blog.hootsuite.com/social-media-image-sizes-guide/)
+- Facebook feed 4:5 at 1080 × 1350 and shared-link previews 1.91:1 at
+  1200 × 630, TikTok 9:16 at 1080 × 1920, Pinterest pins 2:3 at 1000 × 1500,
+  YouTube thumbnails 16:9 at 1280 × 720 —
+  [Hootsuite, social media image sizes](https://blog.hootsuite.com/social-media-image-sizes-guide/),
+  [Sprout Social, social media image sizes](https://sproutsocial.com/insights/social-media-image-sizes-guide/)
+
+Typefaces:
+
+- Google Fonts is unreachable from mainland China, and the failure is a timeout
+  rather than an error —
+  [AppInChina, "Does Google Fonts API work in China?"](https://appinchina.co/does-google-fonts-api-work-in-china/),
+  [mkdocs issue #1138, "Unable to access fonts.googleapis.com in China"](https://github.com/mkdocs/mkdocs/issues/1138)
+- [SIL Open Font License 1.1](https://openfontlicense.org/) — permits bundling
+  and redistributing the nine faces with this site
 
 Storage and hosting:
 

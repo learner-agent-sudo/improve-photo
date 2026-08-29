@@ -2,35 +2,31 @@ import { useState, type ReactNode } from 'react'
 import {
   aspectValue,
   autoLayout,
+  COLLAGE_SHAPES,
+  FONT_BY_KEY,
+  FONTS,
   layoutsFor,
   type Cell,
   type CollageDoc,
-  type TextFont,
   type TextLayer,
+  type TextStyle,
 } from '../engine/collage'
-import type { AspectKey } from '../engine/types'
 import { Slider } from './Slider'
 
 type Tab = 'layout' | 'style' | 'text'
 
-const SHAPES: { key: AspectKey; label: string }[] = [
-  { key: '3:4', label: '3:4' },
-  { key: '4:5', label: '4:5' },
-  { key: '1:1', label: '1:1' },
-  { key: '9:16', label: '9:16' },
-  { key: '4:3', label: '4:3' },
-  { key: '16:9', label: '16:9' },
-]
-
 const BACKGROUNDS = ['#f4efe6', '#ffffff', '#0f0e0c', '#1b1815', '#e8ded0', '#d9c9b4', '#2f4739', '#f2a03d']
 
-const FONTS: { key: TextFont; label: string }[] = [
-  { key: 'display', label: 'Serif' },
-  { key: 'sans', label: 'Sans' },
-  { key: 'mono', label: 'Mono' },
+const TEXT_COLORS = [
+  '#ffffff', '#0f0e0c', '#f2a03d', '#e0561f', '#c62828', '#e91e8c',
+  '#7a5c3e', '#86a97b', '#2f6f6f', '#3457d5', '#f5e6c8', '#8d6e63',
 ]
 
-const TEXT_COLORS = ['#ffffff', '#0f0e0c', '#f2a03d', '#e0561f', '#86a97b', '#7a5c3e']
+const TEXT_STYLES: { key: TextStyle; label: string; hint: string }[] = [
+  { key: 'plain', label: 'Solid', hint: 'Filled letters' },
+  { key: 'outline', label: 'Hollow', hint: 'Outlined letters, so the photo shows through' },
+  { key: 'plate', label: 'Plate', hint: 'Sitting on a colour block' },
+]
 
 /** A miniature of a layout, drawn from its own cells. */
 function LayoutThumb({ cells, aspect }: { cells: Cell[]; aspect: number }) {
@@ -90,6 +86,7 @@ export function CollagePanel({
   const aspect = aspectValue(doc.aspect)
   const layouts = layoutsFor(photoCount)
   const active = selectedText ? doc.texts.find((t) => t.id === selectedText) ?? null : null
+  const spec = active ? FONT_BY_KEY.get(active.font) : undefined
 
   const patchText = (patch: Partial<TextLayer>, key?: string) =>
     onDoc(
@@ -130,7 +127,7 @@ export function CollagePanel({
             <div className="group">
               <h3 className="group-title">Canvas shape</h3>
               <div className="aspect-grid three">
-                {SHAPES.map(({ key, label }) => {
+                {COLLAGE_SHAPES.map(({ key, label, use, bestFor }) => {
                   const r = aspectValue(key)
                   return (
                     <button
@@ -138,6 +135,7 @@ export function CollagePanel({
                       className="aspect-btn"
                       aria-pressed={doc.aspect === key}
                       onClick={() => onDoc({ aspect: key }, 'aspect')}
+                      title={`${label} - best for ${bestFor}`}
                     >
                       <span
                         className="shape"
@@ -147,7 +145,8 @@ export function CollagePanel({
                           height: r >= 1 ? 'auto' : 16,
                         }}
                       />
-                      {label}
+                      <span className="aspect-use">{use}</span>
+                      <span className="aspect-ratio">{label}</span>
                     </button>
                   )
                 })}
@@ -336,17 +335,64 @@ export function CollagePanel({
                   onChange={(e) => patchText({ text: e.target.value }, 'text:content')}
                   aria-label="Text content"
                 />
-                <div className="icon-row" style={{ marginTop: 10 }}>
+                <h4 className="sub-title">Typeface</h4>
+                <div className="font-grid">
                   {FONTS.map((f) => (
                     <button
                       key={f.key}
-                      className="icon-btn"
+                      className="font-btn"
                       aria-pressed={active.font === f.key}
                       onClick={() => patchText({ font: f.key })}
+                      title={f.label}
+                      style={{ fontFamily: f.stack }}
                     >
                       {f.label}
                     </button>
                   ))}
+                </div>
+
+                <h4 className="sub-title">Style</h4>
+                <div className="icon-row">
+                  {TEXT_STYLES.map((st) => (
+                    <button
+                      key={st.key}
+                      className="icon-btn"
+                      aria-pressed={active.style === st.key}
+                      onClick={() => patchText({ style: st.key })}
+                      title={st.hint}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="icon-row">
+                  <button
+                    className="icon-btn"
+                    aria-pressed={active.italic}
+                    disabled={!spec?.hasItalic}
+                    onClick={() => patchText({ italic: !active.italic })}
+                    title={spec?.hasItalic ? 'Italic' : 'This typeface has no italic'}
+                    style={{ fontStyle: 'italic', fontFamily: 'serif' }}
+                  >
+                    I
+                  </button>
+                  <button
+                    className="icon-btn"
+                    aria-pressed={active.uppercase || !!spec?.capsOnly}
+                    disabled={!!spec?.capsOnly}
+                    onClick={() => patchText({ uppercase: !active.uppercase })}
+                    title={spec?.capsOnly ? 'This typeface is capitals only' : 'All capitals'}
+                  >
+                    AA
+                  </button>
+                  <button
+                    className="icon-btn"
+                    aria-pressed={active.shadow}
+                    onClick={() => patchText({ shadow: !active.shadow })}
+                    title="Drop shadow, for light text on a busy photo"
+                  >
+                    Shadow
+                  </button>
                 </div>
                 <div className="icon-row">
                   {(['left', 'center', 'right'] as CanvasTextAlign[]).map((a) => (
@@ -361,7 +407,8 @@ export function CollagePanel({
                     </button>
                   ))}
                 </div>
-                <div className="swatches" style={{ marginBottom: 12 }}>
+                <h4 className="sub-title">Colour</h4>
+                <div className="swatches">
                   {TEXT_COLORS.map((c) => (
                     <button
                       key={c}
@@ -373,6 +420,30 @@ export function CollagePanel({
                     />
                   ))}
                 </div>
+                <div className="field" style={{ marginTop: 8 }}>
+                  <input
+                    type="color"
+                    className="color-input"
+                    value={active.color}
+                    onChange={(e) => patchText({ color: e.target.value }, 'text:color')}
+                    aria-label="Any text colour"
+                  />
+                </div>
+
+                {active.style === 'plate' && (
+                  <>
+                    <h4 className="sub-title">Plate colour</h4>
+                    <div className="field">
+                      <input
+                        type="color"
+                        className="color-input"
+                        value={active.plateColor}
+                        onChange={(e) => patchText({ plateColor: e.target.value }, 'text:plate')}
+                        aria-label="Plate colour"
+                      />
+                    </div>
+                  </>
+                )}
                 <Slider
                   label="Size"
                   value={active.size}
@@ -384,16 +455,32 @@ export function CollagePanel({
                   onChange={(v) => patchText({ size: v }, 'text:size')}
                   onReset={() => patchText({ size: 0.07 })}
                 />
+                {spec?.weights ? (
+                  <Slider
+                    label="Weight"
+                    value={Math.min(spec.weights[1], Math.max(spec.weights[0], active.weight))}
+                    min={spec.weights[0]}
+                    max={spec.weights[1]}
+                    step={50}
+                    bipolar={false}
+                    display={(v) => String(Math.round(v))}
+                    onChange={(v) => patchText({ weight: Math.round(v) }, 'text:weight')}
+                    onReset={() => patchText({ weight: 600 })}
+                  />
+                ) : (
+                  <p className="field-hint" style={{ marginBottom: 10 }}>
+                    {spec?.label} comes in one weight.
+                  </p>
+                )}
                 <Slider
-                  label="Weight"
-                  value={active.weight}
-                  min={300}
-                  max={900}
-                  step={100}
-                  bipolar={false}
-                  display={(v) => String(Math.round(v))}
-                  onChange={(v) => patchText({ weight: Math.round(v) }, 'text:weight')}
-                  onReset={() => patchText({ weight: 600 })}
+                  label="Letter spacing"
+                  value={active.tracking}
+                  min={-0.05}
+                  max={0.4}
+                  step={0.005}
+                  display={(v) => `${v > 0 ? '+' : ''}${(v * 100).toFixed(0)}`}
+                  onChange={(v) => patchText({ tracking: v }, 'text:track')}
+                  onReset={() => patchText({ tracking: 0 })}
                 />
                 <Slider
                   label="Rotation"
@@ -405,14 +492,6 @@ export function CollagePanel({
                   onChange={(v) => patchText({ rotation: v }, 'text:rot')}
                   onReset={() => patchText({ rotation: 0 })}
                 />
-                <label className="switch" style={{ marginBottom: 12 }}>
-                  <input
-                    type="checkbox"
-                    checked={active.shadow}
-                    onChange={(e) => patchText({ shadow: e.target.checked })}
-                  />
-                  <span>Drop shadow, for light text on a busy photo</span>
-                </label>
                 <button
                   className="btn btn-sm"
                   style={{ width: '100%' }}

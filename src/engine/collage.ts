@@ -35,7 +35,51 @@ export interface Slot {
 
 export const EMPTY_SLOT: Slot = { photoId: null, zoom: 1, offsetX: 0, offsetY: 0 }
 
-export type TextFont = 'display' | 'sans' | 'mono'
+export type TextFont =
+  | 'fraunces'
+  | 'playfair'
+  | 'dmserif'
+  | 'plex'
+  | 'archivo'
+  | 'anton'
+  | 'bebas'
+  | 'caveat'
+  | 'mono'
+
+export type TextStyle = 'plain' | 'outline' | 'plate'
+
+export interface FontSpec {
+  key: TextFont
+  label: string
+  stack: string
+  /** Null when the family ships a single weight, so the panel can say so. */
+  weights: [number, number] | null
+  hasItalic: boolean
+  /** Families that only ever read as capitals. */
+  capsOnly?: boolean
+}
+
+/**
+ * A deliberately small, contrasting set rather than a font menu.
+ *
+ * Each one does a job the others cannot: an editorial serif, a high-contrast
+ * fashion serif, a heavy poster face, a condensed one for stacked headlines, a
+ * handwritten note, and clean workhorses. Twenty near-identical sans faces
+ * would be a longer list and a worse choice.
+ */
+export const FONTS: FontSpec[] = [
+  { key: 'fraunces', label: 'Fraunces', stack: "'Fraunces', Georgia, serif", weights: [300, 900], hasItalic: true },
+  { key: 'playfair', label: 'Playfair', stack: "'Playfair Display', Georgia, serif", weights: [400, 900], hasItalic: true },
+  { key: 'dmserif', label: 'DM Serif', stack: "'DM Serif Display', Georgia, serif", weights: null, hasItalic: true },
+  { key: 'plex', label: 'Plex Sans', stack: "'IBM Plex Sans', system-ui, sans-serif", weights: [300, 700], hasItalic: true },
+  { key: 'archivo', label: 'Archivo', stack: "'Archivo', system-ui, sans-serif", weights: [400, 900], hasItalic: true },
+  { key: 'anton', label: 'Anton', stack: "'Anton', Impact, sans-serif", weights: null, hasItalic: false },
+  { key: 'bebas', label: 'Bebas', stack: "'Bebas Neue', Impact, sans-serif", weights: null, hasItalic: false, capsOnly: true },
+  { key: 'caveat', label: 'Caveat', stack: "'Caveat', cursive", weights: [400, 700], hasItalic: false },
+  { key: 'mono', label: 'Plex Mono', stack: "'IBM Plex Mono', ui-monospace, monospace", weights: [400, 600], hasItalic: true },
+]
+
+export const FONT_BY_KEY = new Map(FONTS.map((f) => [f.key, f]))
 
 export interface TextLayer {
   id: string
@@ -53,6 +97,14 @@ export interface TextLayer {
   rotation: number
   /** A soft drop shadow, so light text stays readable over a bright photo. */
   shadow: boolean
+  italic: boolean
+  uppercase: boolean
+  /** Letter spacing, in em. Negative tightens. */
+  tracking: number
+  /** Solid, hollow, or sitting on a coloured plate. */
+  style: TextStyle
+  /** The plate's colour, when style is 'plate'. */
+  plateColor: string
 }
 
 export interface CollageDoc {
@@ -71,11 +123,25 @@ export interface CollageDoc {
   texts: TextLayer[]
 }
 
-export const FONT_STACKS: Record<TextFont, string> = {
-  display: "'Fraunces', Georgia, 'Times New Roman', serif",
-  sans: "'IBM Plex Sans', system-ui, -apple-system, sans-serif",
-  mono: "'IBM Plex Mono', ui-monospace, Menlo, monospace",
+/** Back-compat shape for callers that just want a stack by key. */
+export const FONT_STACKS = Object.fromEntries(FONTS.map((f) => [f.key, f.stack])) as Record<
+  TextFont,
+  string
+>
+
+/** The CSS font shorthand for a layer, at a given pixel size. */
+export function fontShorthand(t: TextLayer, px: number): string {
+  const spec = FONT_BY_KEY.get(t.font) ?? FONTS[0]
+  const italic = t.italic && spec.hasItalic ? 'italic ' : ''
+  const weight = spec.weights
+    ? Math.min(spec.weights[1], Math.max(spec.weights[0], Math.round(t.weight)))
+    : 400
+  return `${italic}${weight} ${px}px ${spec.stack}`
 }
+
+/** What actually gets drawn, after the uppercase switch. */
+export const displayText = (t: TextLayer): string =>
+  t.uppercase || FONT_BY_KEY.get(t.font)?.capsOnly ? t.text.toUpperCase() : t.text
 
 const grid = (cols: number, rows: number): Cell[] => {
   const cells: Cell[] = []
@@ -188,6 +254,39 @@ export function autoLayout(count: number, canvasAspect: number): Cell[] {
 
 export const aspectValue = (a: AspectKey, fallback = 3 / 4): number =>
   a === 'original' || a === 'free' ? fallback : ASPECT_RATIOS[a]
+
+/**
+ * The canvas shapes offered for a collage, named by where people post them.
+ *
+ * `best` is the long edge each platform publishes as its upload size, so
+ * picking it hands the platform exactly what it asks for and leaves it nothing
+ * to resample. Everything else in the size menu is derived from it.
+ */
+export interface ShapeUse {
+  key: AspectKey
+  /** The ratio itself, for people who think in ratios. */
+  label: string
+  /** Where it goes - short enough for a button. */
+  use: string
+  /** Long edge in pixels the platform asks for. */
+  best: number
+  /** Spelled out, for the export menu. */
+  bestFor: string
+}
+
+export const COLLAGE_SHAPES: ShapeUse[] = [
+  { key: '3:4', label: '3:4', use: 'Xiaohongshu', best: 1440, bestFor: 'Xiaohongshu / RED' },
+  { key: '4:5', label: '4:5', use: 'IG / FB post', best: 1350, bestFor: 'an Instagram or Facebook post' },
+  { key: '1:1', label: '1:1', use: 'Square post', best: 1080, bestFor: 'a square post anywhere' },
+  { key: '9:16', label: '9:16', use: 'Reel / Story', best: 1920, bestFor: 'Reels, Stories and TikTok' },
+  { key: '4:3', label: '4:3', use: 'Classic', best: 1440, bestFor: 'a classic camera shape' },
+  { key: '16:9', label: '16:9', use: 'YouTube / web', best: 1920, bestFor: 'YouTube and website banners' },
+]
+
+export const SHAPE_BY_KEY = new Map(COLLAGE_SHAPES.map((s) => [s.key, s]))
+
+/** The long edge a shape is happiest at, falling back for shapes not listed. */
+export const bestLongEdge = (a: AspectKey): number => SHAPE_BY_KEY.get(a)?.best ?? 1440
 
 /** Cells for a layout id, resolving the generated case. */
 export function resolveCells(layoutId: string, count: number, aspect: AspectKey): Cell[] {

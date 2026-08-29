@@ -1,5 +1,6 @@
-import { aspectValue, type CollageDoc } from '../engine/collage'
-import type { ExportFormat } from '../engine/types'
+import { useEffect, useMemo } from 'react'
+import { aspectValue, SHAPE_BY_KEY, type CollageDoc } from '../engine/collage'
+import type { AspectKey, ExportFormat } from '../engine/types'
 
 export interface CollageExportConfig {
   longEdge: number
@@ -7,12 +8,24 @@ export interface CollageExportConfig {
   quality: number
 }
 
-const SIZES = [
-  { edge: 1080, note: 'small' },
-  { edge: 1440, note: 'Xiaohongshu 3:4' },
-  { edge: 1920, note: 'stories' },
-  { edge: 2048, note: 'large' },
-]
+/**
+ * Sizes offered for a given canvas shape.
+ *
+ * The middle option is the exact pixel size the platform for that shape asks
+ * for, so it uploads without being resampled. The other two are for sending
+ * something small and for keeping room to crop later.
+ */
+export function sizesFor(aspect: AspectKey) {
+  const shape = SHAPE_BY_KEY.get(aspect)
+  const best = shape?.best ?? 1440
+  const bestFor = shape ? `best for ${shape.bestFor}` : 'a good all-round size'
+  // Half and double, so both stay whole numbers on both edges.
+  return [
+    { edge: best / 2, note: 'half size, quick to send' },
+    { edge: best, note: bestFor },
+    { edge: best * 2, note: 'extra sharp, room to crop later' },
+  ]
+}
 
 /** Pixel size of the finished collage for a given long edge. */
 export function collageSize(doc: CollageDoc, longEdge: number): [number, number] {
@@ -37,7 +50,17 @@ export function CollageExportPanel({
   busy: boolean
   filled: number
 }) {
-  const [w, h] = collageSize(doc, config.longEdge)
+  const sizes = useMemo(() => sizesFor(doc.aspect), [doc.aspect])
+  const offered = sizes.some((s) => s.edge === config.longEdge)
+  const longEdge = offered ? config.longEdge : sizes[1].edge
+
+  // Changing the canvas shape changes which sizes make sense, so a long edge
+  // carried over from the old shape can no longer be selected. Snap it to the
+  // one the new shape's platform wants rather than showing an empty menu.
+  useEffect(() => {
+    if (!offered) onChange({ longEdge: sizes[1].edge })
+  }, [offered, sizes, onChange])
+  const [w, h] = collageSize(doc, longEdge)
   const qFill = ((config.quality - 0.4) / 0.6) * 100
 
   return (
@@ -47,10 +70,10 @@ export function CollageExportPanel({
         <select
           id="cx-size"
           className="select"
-          value={config.longEdge}
+          value={longEdge}
           onChange={(e) => onChange({ longEdge: Number(e.target.value) })}
         >
-          {SIZES.map((s) => {
+          {sizes.map((s) => {
             const [sw, sh] = collageSize(doc, s.edge)
             return (
               <option key={s.edge} value={s.edge}>

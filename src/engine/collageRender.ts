@@ -7,7 +7,7 @@
  * 2D rather than in WebGL keeps text and rounded corners trivial and costs
  * nothing in quality, because every tile is already at its final resolution.
  */
-import { FONT_STACKS, slotEdit, type CollageDoc } from './collage'
+import { displayText, fontShorthand, slotEdit, type CollageDoc, type TextLayer } from './collage'
 import { make2dCanvas } from './decode'
 import { Renderer } from './renderer'
 import type { Edit } from './types'
@@ -156,7 +156,7 @@ export class CollageRenderer {
           ctx.stroke()
           ctx.setLineDash([])
           ctx.fillStyle = 'rgba(0,0,0,0.38)'
-          ctx.font = `500 ${Math.max(11, short * 0.028)}px ${FONT_STACKS.mono}`
+          ctx.font = `500 ${Math.max(11, short * 0.028)}px 'IBM Plex Mono', ui-monospace, monospace`
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
           ctx.fillText(String(i + 1), r.x + r.w / 2, r.y + r.h / 2)
@@ -179,25 +179,7 @@ export class CollageRenderer {
 
     // --- text ---------------------------------------------------------------
     for (const t of doc.texts) {
-      const px = Math.max(4, t.size * short)
-      ctx.save()
-      ctx.translate(t.x * W, t.y * H)
-      ctx.rotate((t.rotation * Math.PI) / 180)
-      ctx.font = `${t.weight} ${px}px ${FONT_STACKS[t.font]}`
-      ctx.textAlign = t.align
-      ctx.textBaseline = 'middle'
-      if (t.shadow) {
-        ctx.shadowColor = 'rgba(0,0,0,0.5)'
-        ctx.shadowBlur = px * 0.28
-        ctx.shadowOffsetY = px * 0.05
-      }
-      ctx.fillStyle = t.color
-      const lines = t.text.split('\n')
-      const lh = px * 1.22
-      lines.forEach((line, i) => {
-        ctx.fillText(line, 0, (i - (lines.length - 1) / 2) * lh)
-      })
-      ctx.restore()
+      drawText(ctx, t, W, H, short)
     }
 
     // --- selection, preview only -------------------------------------------
@@ -215,7 +197,7 @@ export class CollageRenderer {
       const t = doc.texts.find((x) => x.id === opts.selectedText)
       if (t) {
         const px = Math.max(4, t.size * short)
-        const box = measureText(ctx, t.text, px, t.weight, t.font)
+        const box = measureText(ctx, t, px)
         ctx.save()
         ctx.translate(t.x * W, t.y * H)
         ctx.rotate((t.rotation * Math.PI) / 180)
@@ -237,19 +219,78 @@ export class CollageRenderer {
   }
 }
 
-export function measureText(
-  ctx: Ctx2D,
-  text: string,
-  px: number,
-  weight: number,
-  font: keyof typeof FONT_STACKS,
-) {
-  const prev = ctx.font
-  ctx.font = `${weight} ${px}px ${FONT_STACKS[font]}`
-  const lines = text.split('\n')
+/** Applies a layer's typography to a context. Shared so measuring matches drawing. */
+function applyFont(ctx: Ctx2D, t: TextLayer, px: number) {
+  ctx.font = fontShorthand(t, px)
+  // Not in every engine yet; assigning it where it is missing is harmless, and
+  // preview and export share the same canvas API so they can never disagree.
+  ;(ctx as CanvasRenderingContext2D).letterSpacing = `${t.tracking.toFixed(3)}em`
+}
+
+export function measureText(ctx: Ctx2D, t: TextLayer, px: number) {
+  const prevFont = ctx.font
+  const prevSpacing = (ctx as CanvasRenderingContext2D).letterSpacing
+  applyFont(ctx, t, px)
+  const lines = displayText(t).split('\n')
   const w = Math.max(...lines.map((l) => ctx.measureText(l).width), 1)
-  ctx.font = prev
-  return { w, h: lines.length * px * 1.22 }
+  ctx.font = prevFont
+  ;(ctx as CanvasRenderingContext2D).letterSpacing = prevSpacing
+  return { w, h: lines.length * px * 1.22, lines }
+}
+
+/**
+ * One text layer.
+ *
+ * Order matters: the plate is laid down before the shadow is turned on, so the
+ * plate itself casts nothing and the shadow belongs to the letters alone. A
+ * shadowed plate would read as a smudge behind a solid block.
+ */
+function drawText(ctx: Ctx2D, t: TextLayer, W: number, H: number, short: number) {
+  const px = Math.max(4, t.size * short)
+  ctx.save()
+  ctx.translate(t.x * W, t.y * H)
+  ctx.rotate((t.rotation * Math.PI) / 180)
+  applyFont(ctx, t, px)
+  ctx.textAlign = t.align
+  ctx.textBaseline = 'middle'
+
+  const lines = displayText(t).split('\n')
+  const lh = px * 1.22
+  const widest = Math.max(...lines.map((l) => ctx.measureText(l).width), 1)
+  const originX = t.align === 'center' ? -widest / 2 : t.align === 'right' ? -widest : 0
+
+  if (t.style === 'plate') {
+    const padX = px * 0.32
+    const padY = px * 0.2
+    const boxH = lines.length * lh
+    ctx.fillStyle = t.plateColor
+    roundedPath(
+      ctx,
+      originX - padX,
+      -boxH / 2 - padY + (lh - px) / 2,
+      widest + padX * 2,
+      boxH + padY * 2,
+      px * 0.18,
+    )
+    ctx.fill()
+  }
+
+  if (t.shadow) {
+    ctx.shadowColor = 'rgba(0,0,0,0.5)'
+    ctx.shadowBlur = px * 0.28
+    ctx.shadowOffsetY = px * 0.05
+  }
+
+  if (t.style === 'outline') {
+    ctx.strokeStyle = t.color
+    ctx.lineWidth = Math.max(1, px * 0.055)
+    ctx.lineJoin = 'round'
+    lines.forEach((line, i) => ctx.strokeText(line, 0, (i - (lines.length - 1) / 2) * lh))
+  } else {
+    ctx.fillStyle = t.color
+    lines.forEach((line, i) => ctx.fillText(line, 0, (i - (lines.length - 1) / 2) * lh))
+  }
+  ctx.restore()
 }
 
 /**

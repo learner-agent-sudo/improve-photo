@@ -71,19 +71,23 @@ export type AspectKey =
   | '1:1'
   | '4:5'
   | '3:4'
+  | '2:3'
   | '9:16'
   | '4:3'
   | '3:2'
   | '16:9'
+  | '1.91:1'
 
 export const ASPECT_RATIOS: Record<Exclude<AspectKey, 'original' | 'free'>, number> = {
   '1:1': 1,
   '4:5': 4 / 5,
   '3:4': 3 / 4,
+  '2:3': 2 / 3,
   '9:16': 9 / 16,
   '4:3': 4 / 3,
   '3:2': 3 / 2,
   '16:9': 16 / 9,
+  '1.91:1': 1.91,
 }
 
 /** A rectangle in normalised 0..1 coordinates. */
