@@ -7,8 +7,22 @@ const MAX_CANVAS_EDGE = 2200
 const LIFT_MS = 420
 /** Movement past this cancels the long press and becomes a pan. */
 const LIFT_SLOP = 9
+/** How far in the view can be pushed. Past 4x a phone screen shows one tile. */
+const MAX_VIEW = 4
+/** Two taps closer than this in time and place count as a double tap. */
+const DOUBLE_TAP_MS = 300
+const DOUBLE_TAP_SLOP = 24
 
-type Mode = 'pan' | 'lift' | 'text' | 'pinch'
+type Mode = 'pan' | 'lift' | 'text' | 'view' | 'viewpan'
+
+/** Where the picture sits inside its frame: a scale about the centre, then a shift. */
+interface View {
+  s: number
+  x: number
+  y: number
+}
+
+const FIT: View = { s: 1, x: 0, y: 0 }
 
 interface DragState {
   mode: Mode
@@ -20,6 +34,10 @@ interface DragState {
   baseY: number
   baseZoom: number
   pinchStart: number
+  /** For a view gesture: the view when the fingers landed, and where they landed. */
+  baseView?: View
+  anchorX?: number
+  anchorY?: number
 }
 
 /**
@@ -62,6 +80,15 @@ export function CollageStage({
   const [lifted, setLifted] = useState<number | null>(null)
   const [dropCell, setDropCell] = useState<number | null>(null)
 
+  // The view is a CSS transform on the frame, so pinching is instant - it never
+  // waits on a re-render of the collage. `renderScale` follows it once the
+  // fingers lift, and that is what re-renders the canvas at a matching pixel
+  // count, so a picture held at 3x is drawn at 3x rather than merely magnified.
+  const [view, setView] = useState<View>(FIT)
+  const [renderScale, setRenderScale] = useState(1)
+  const settle = useRef<number | undefined>(undefined)
+  const lastTap = useRef({ t: 0, x: 0, y: 0 })
+
   const onErrorRef = useRef(onError)
   onErrorRef.current = onError
 
@@ -99,8 +126,8 @@ export function CollageStage({
   cssH = Math.max(1, Math.floor(cssH))
 
   const dpr = Math.min(typeof devicePixelRatio === 'number' ? devicePixelRatio : 1, 2)
-  let bw = Math.round(cssW * dpr)
-  let bh = Math.round(cssH * dpr)
+  let bw = Math.round(cssW * dpr * renderScale)
+  let bh = Math.round(cssH * dpr * renderScale)
   const longest = Math.max(bw, bh)
   if (longest > MAX_CANVAS_EDGE) {
     const s = MAX_CANVAS_EDGE / longest
@@ -136,6 +163,69 @@ export function CollageStage({
     })
     return () => cancelAnimationFrame(raf.current)
   }, [doc, sources, bw, bh, cssW, cssH, box.w, selectedCell, selectedText, dropCell, lifted])
+
+  // --- the view --------------------------------------------------------------
+  /**
+   * Keeps the frame overlapping the screen.
+   *
+   * At fit there is no slack and the frame stays centred; zoomed in, the shift
+   * is limited to the part of the frame that hangs off each edge, so the
+   * picture can never be flung away and lost.
+   */
+  const clampView = useCallback(
+    (v: View): View => {
+      const s = Math.max(1, Math.min(MAX_VIEW, v.s))
+      const slackX = Math.max(0, (cssW * s - box.w) / 2)
+      const slackY = Math.max(0, (cssH * s - box.h) / 2)
+      return {
+        s,
+        x: Math.max(-slackX, Math.min(slackX, v.x)),
+        y: Math.max(-slackY, Math.min(slackY, v.y)),
+      }
+    },
+    [cssW, cssH, box.w, box.h],
+  )
+
+  /** Redraws at a pixel count matching the zoom, once the fingers are still. */
+  const settleRender = useCallback((s: number) => {
+    window.clearTimeout(settle.current)
+    settle.current = window.setTimeout(() => setRenderScale(Math.max(1, Math.min(MAX_VIEW, s))), 140)
+  }, [])
+
+  const zoomView = useCallback(
+    (factor: number, atX?: number, atY?: number) => {
+      const wrap = wrapRef.current?.getBoundingClientRect()
+      setView((cur) => {
+        const s = Math.max(1, Math.min(MAX_VIEW, cur.s * factor))
+        if (!wrap || atX === undefined || atY === undefined) {
+          const k = s / cur.s
+          settleRender(s)
+          return clampView({ s, x: cur.x * k, y: cur.y * k })
+        }
+        // Hold whatever sits under the fingers still while the scale changes.
+        const cx = wrap.left + wrap.width / 2
+        const cy = wrap.top + wrap.height / 2
+        const localX = (atX - cx - cur.x) / cur.s
+        const localY = (atY - cy - cur.y) / cur.s
+        settleRender(s)
+        return clampView({ s, x: atX - cx - s * localX, y: atY - cy - s * localY })
+      })
+    },
+    [clampView, settleRender],
+  )
+
+  const fitView = useCallback(() => {
+    setView(FIT)
+    setRenderScale(1)
+  }, [])
+
+  // A canvas that changes shape or size should start from a whole view again.
+  useEffect(() => {
+    setView(FIT)
+    setRenderScale(1)
+  }, [doc.aspect, doc.layoutId])
+
+  useEffect(() => () => window.clearTimeout(settle.current), [])
 
   // --- hit testing -----------------------------------------------------------
   const toCanvas = useCallback(
@@ -215,17 +305,31 @@ export function CollageStage({
       ;(e.target as Element).setPointerCapture(e.pointerId)
       pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
-      // Second finger on the same tile: pinch to zoom.
-      if (pointers.current.size === 2 && drag.current && drag.current.mode !== 'text') {
+      // Two fingers always mean the same thing: make the whole collage bigger
+      // or smaller. An earlier attempt gave the pinch to the selected frame's
+      // own photo when the fingers landed on it, which read well on paper and
+      // was unusable in practice - a frame is always selected, and the first
+      // finger selects whatever it touches, so the same gesture did different
+      // things depending on invisible state. Reframing a photo inside its cell
+      // is the +/- pair on the frame's own toolbar, which says what it does.
+      if (pointers.current.size === 2) {
         const [a, b] = [...pointers.current.values()]
+        const dist = Math.hypot(a.x - b.x, a.y - b.y)
         window.clearTimeout(liftTimer.current)
-        drag.current = {
-          ...drag.current,
-          mode: 'pinch',
-          baseZoom: doc.slots[drag.current.index]?.zoom ?? 1,
-          pinchStart: Math.hypot(a.x - b.x, a.y - b.y),
-        }
         setLifted(null)
+        drag.current = {
+          mode: 'view',
+          index: -1,
+          startX: 0,
+          startY: 0,
+          baseX: 0,
+          baseY: 0,
+          baseZoom: 1,
+          pinchStart: dist,
+          baseView: view,
+          anchorX: (a.x + b.x) / 2,
+          anchorY: (a.y + b.y) / 2,
+        }
         return
       }
       if (pointers.current.size > 1) return
@@ -251,21 +355,52 @@ export function CollageStage({
 
       const i = cellAt(p)
       onSelectText(null)
-      onSelectCell(i)
-      if (i === null) return
-      const slot = doc.slots[i]
-      if (!slot?.photoId) return
+      const slot = i === null ? undefined : doc.slots[i]
+
+      // One finger, one rule, at every zoom level: inside the frame you have
+      // chosen, it moves that photo; anywhere else, it drags the whole picture.
+      //
+      // The choosing is what makes it unambiguous, and unlike the selection the
+      // pinch used to consult, this one is on screen - the chosen frame carries
+      // a ring and its own toolbar. It costs a tap before a photo can be moved,
+      // and buys a drag that behaves the same whether you are looking at the
+      // whole collage or at one corner of it. Without that, zooming in would be
+      // a trap: the tiles fill the screen, leaving nothing to grab to get back.
+      const onChosen = i !== null && i === selectedCell && !!slot?.photoId
+      if (!onChosen) {
+        onSelectCell(i)
+        drag.current = {
+          mode: 'viewpan',
+          index: -1,
+          startX: e.clientX,
+          startY: e.clientY,
+          baseX: 0,
+          baseY: 0,
+          baseZoom: 1,
+          pinchStart: 0,
+          baseView: view,
+        }
+        return
+      }
 
       drag.current = {
         mode: 'pan',
         index: i,
         startX: p.x,
         startY: p.y,
-        baseX: slot.offsetX,
-        baseY: slot.offsetY,
-        baseZoom: slot.zoom,
+        baseX: slot!.offsetX,
+        baseY: slot!.offsetY,
+        baseZoom: slot!.zoom,
         pinchStart: 0,
       }
+      // Moving a photo redraws its tile on every frame, and while the view is
+      // enlarged that tile is being drawn at several times the pixel count.
+      // Drop back to fit resolution for the duration of the drag: the picture
+      // is moving, so nobody is reading its detail, and it sharpens again the
+      // moment the finger lifts. Only the backing store changes - the canvas
+      // keeps its CSS size, so nothing on screen moves.
+      window.clearTimeout(settle.current)
+      setRenderScale(1)
       // Hold still and the tile lifts out, ready to trade places.
       window.clearTimeout(liftTimer.current)
       liftTimer.current = window.setTimeout(() => {
@@ -275,7 +410,7 @@ export function CollageStage({
         }
       }, LIFT_MS)
     },
-    [toCanvas, textAt, cellAt, doc.texts, doc.slots, onSelectCell, onSelectText],
+    [toCanvas, textAt, cellAt, doc.texts, doc.slots, onSelectCell, onSelectText, selectedCell, view, clampView],
   )
 
   const onPointerMove = useCallback(
@@ -288,16 +423,34 @@ export function CollageStage({
       const p = toCanvas(e)
       if (!p) return
 
-      if (d.mode === 'pinch') {
-        const vals = [...pointers.current.values()]
-        if (vals.length < 2) return
-        const dist = Math.hypot(vals[0].x - vals[1].x, vals[0].y - vals[1].y)
-        const ratio = dist / Math.max(d.pinchStart, 1)
-        setSlot(
-          d.index,
-          { zoom: Math.max(1, Math.min(4, d.baseZoom * ratio)) },
-          `zoom:${d.index}`,
+      if (d.mode === 'viewpan' && d.baseView) {
+        setView(
+          clampView({
+            s: d.baseView.s,
+            x: d.baseView.x + (e.clientX - d.startX),
+            y: d.baseView.y + (e.clientY - d.startY),
+          }),
         )
+        return
+      }
+
+      // Zooming and panning the view are the same gesture: scale by how far the
+      // fingers spread, shift by where their midpoint went. Doing them together
+      // is what makes the point between the fingers stay put.
+      if (d.mode === 'view') {
+        const vals = [...pointers.current.values()]
+        if (vals.length < 2 || !d.baseView) return
+        const wrap = wrapRef.current?.getBoundingClientRect()
+        if (!wrap) return
+        const dist = Math.hypot(vals[0].x - vals[1].x, vals[0].y - vals[1].y)
+        const mx = (vals[0].x + vals[1].x) / 2
+        const my = (vals[0].y + vals[1].y) / 2
+        const s = Math.max(1, Math.min(MAX_VIEW, d.baseView.s * (dist / Math.max(d.pinchStart, 1))))
+        const cx = wrap.left + wrap.width / 2
+        const cy = wrap.top + wrap.height / 2
+        const localX = ((d.anchorX ?? mx) - cx - d.baseView.x) / d.baseView.s
+        const localY = ((d.anchorY ?? my) - cy - d.baseView.y) / d.baseView.s
+        setView(clampView({ s, x: mx - cx - s * localX, y: my - cy - s * localY }))
         return
       }
 
@@ -338,7 +491,7 @@ export function CollageStage({
         'slot-pan',
       )
     },
-    [toCanvas, cellAt, doc, bw, bh, onDoc, setSlot],
+    [toCanvas, cellAt, doc, bw, bh, onDoc, setSlot, clampView],
   )
 
   const endPointer = useCallback(
@@ -350,6 +503,35 @@ export function CollageStage({
       drag.current = null
       setLifted(null)
       setDropCell(null)
+
+      // A pinch is never a tap.
+      if (d?.mode === 'view') {
+        settleRender(view.s)
+        return
+      }
+
+      // Double tap, counted here rather than left to dblclick, because a canvas
+      // with touch-action: none does not reliably raise one on a phone.
+      //
+      // It means zoom, wherever it lands. Giving it a second meaning on a photo
+      // - "put this one back" - made it unreachable everywhere else, because a
+      // filled collage is photos edge to edge and has essentially no background
+      // left to tap. Putting a photo back is the Reset button on the frame's
+      // own toolbar, which was already there and says so.
+      const now = Date.now()
+      const prev = lastTap.current
+      const quick =
+        now - prev.t < DOUBLE_TAP_MS &&
+        Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < DOUBLE_TAP_SLOP
+      lastTap.current = quick ? { t: 0, x: 0, y: 0 } : { t: now, x: e.clientX, y: e.clientY }
+      if (quick && (!d || d.mode === 'pan' || d.mode === 'viewpan')) {
+        if (view.s > 1.02) fitView()
+        else zoomView(2, e.clientX, e.clientY)
+        return
+      }
+
+      // Whatever the gesture was, the picture is still now: draw it properly.
+      if (view.s > 1.02) settleRender(view.s)
       if (!d || d.mode !== 'lift') return
 
       const p = toCanvas(e)
@@ -362,28 +544,24 @@ export function CollageStage({
       onDoc({ slots }, 'slot-swap')
       onSelectCell(target)
     },
-    [toCanvas, cellAt, doc.slots, onDoc, onSelectCell],
+    [toCanvas, cellAt, doc.slots, onDoc, onSelectCell, view.s, settleRender, fitView, zoomView],
   )
 
   const onWheel = useCallback(
     (e: React.WheelEvent) => {
+      // Ctrl or Command with the wheel is what every map and drawing tool uses
+      // for "zoom the view", and it is also what a trackpad pinch sends.
+      if (e.ctrlKey || e.metaKey) {
+        zoomView(e.deltaY > 0 ? 0.92 : 1.08, e.clientX, e.clientY)
+        return
+      }
       const p = toCanvas(e)
       if (!p) return
       const i = cellAt(p)
       if (i === null) return
       zoomBy(i, e.deltaY > 0 ? -0.08 : 0.08)
     },
-    [toCanvas, cellAt, zoomBy],
-  )
-
-  const onDoubleClick = useCallback(
-    (e: React.MouseEvent) => {
-      const p = toCanvas(e)
-      if (!p) return
-      const i = cellAt(p)
-      if (i !== null && doc.slots[i]?.photoId) resetSlot(i)
-    },
-    [toCanvas, cellAt, doc.slots, resetSlot],
+    [toCanvas, cellAt, zoomBy, zoomView],
   )
 
   // --- dropping a photo from the roll ---------------------------------------
@@ -426,7 +604,11 @@ export function CollageStage({
       <div className="stage-canvas-wrap collage" ref={wrapRef}>
         <div
           className={`canvas-frame${lifted !== null ? ' lifting' : ''}`}
-          style={{ width: cssW, height: cssH }}
+          style={{
+            width: cssW,
+            height: cssH,
+            transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})`,
+          }}
         >
           <canvas
             ref={canvasRef}
@@ -435,7 +617,6 @@ export function CollageStage({
             onPointerUp={endPointer}
             onPointerCancel={endPointer}
             onWheel={onWheel}
-            onDoubleClick={onDoubleClick}
             onDragOver={onDragOver}
             onDragLeave={() => setDropCell(null)}
             onDrop={onDrop}
@@ -469,6 +650,27 @@ export function CollageStage({
           </div>
         )}
 
+        {view.s > 1.02 && (
+          <div className="view-chip" role="toolbar" aria-label="Zoom">
+            <button
+              className="view-btn"
+              onClick={() => zoomView(1 / 1.4)}
+              aria-label="Zoom out"
+            >
+              −
+            </button>
+            <span className="view-level" aria-live="polite">
+              {Math.round(view.s * 100)}%
+            </span>
+            <button className="view-btn" onClick={() => zoomView(1.4)} aria-label="Zoom in">
+              +
+            </button>
+            <button className="view-btn wide" onClick={fitView}>
+              Fit
+            </button>
+          </div>
+        )}
+
         {filled === 0 && (
           <p className="stage-hint">
             Tap a frame, then tap a photo below. Or drag a photo straight onto one.
@@ -484,7 +686,8 @@ export function CollageStage({
         </span>
         <div className="topbar-spacer" />
         <span className="gesture-hint">
-          drag to move the photo · pinch or scroll to zoom · hold to swap · double-tap to reset
+          pinch or double-tap to enlarge · drag to move around · tap a photo, then drag it to
+          reframe · hold to swap two · Reset puts one back
         </span>
       </div>
     </section>

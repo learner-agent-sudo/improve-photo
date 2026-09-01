@@ -11,9 +11,10 @@ import {
   type TextLayer,
   type TextStyle,
 } from '../engine/collage'
+import { PHONE_QUERY, useMediaQuery } from '../state/media'
 import { Slider } from './Slider'
 
-type Tab = 'layout' | 'style' | 'text'
+type Tab = 'layout' | 'style' | 'text' | 'export'
 
 const BACKGROUNDS = ['#f4efe6', '#ffffff', '#0f0e0c', '#1b1815', '#e8ded0', '#d9c9b4', '#2f4739', '#f2a03d']
 
@@ -83,6 +84,12 @@ export function CollagePanel({
   footer?: ReactNode
 }) {
   const [tab, setTab] = useState<Tab>('layout')
+  // On a phone the export controls are a tab rather than a permanent footer.
+  // That block is 210px tall - on a 390x844 screen it was costing the canvas
+  // a quarter of the display to show a menu you touch once, at the end.
+  const phone = useMediaQuery(PHONE_QUERY)
+  const tabs: Tab[] = phone ? ['layout', 'style', 'text', 'export'] : ['layout', 'style', 'text']
+  const current: Tab = tab === 'export' && !phone ? 'layout' : tab
   const aspect = aspectValue(doc.aspect)
   const layouts = layoutsFor(photoCount)
   const active = selectedText ? doc.texts.find((t) => t.id === selectedText) ?? null : null
@@ -97,12 +104,12 @@ export function CollagePanel({
   return (
     <aside className={`panel${collapsed ? ' collapsed' : ''}`}>
       <div className="tabs" role="tablist">
-        {(['layout', 'style', 'text'] as Tab[]).map((t) => (
+        {tabs.map((t) => (
           <button
             key={t}
             className="tab"
             role="tab"
-            aria-selected={tab === t}
+            aria-selected={current === t}
             onClick={() => {
               setTab(t)
               onExpand?.()
@@ -122,7 +129,7 @@ export function CollagePanel({
       </div>
 
       <div className="panel-body">
-        {tab === 'layout' && (
+        {current === 'layout' && (
           <>
             <div className="group">
               <h3 className="group-title">Canvas shape</h3>
@@ -232,7 +239,7 @@ export function CollagePanel({
           </>
         )}
 
-        {tab === 'style' && (
+        {current === 'style' && (
           <>
             <div className="group">
               <h3 className="group-title">Spacing</h3>
@@ -299,7 +306,7 @@ export function CollagePanel({
           </>
         )}
 
-        {tab === 'text' && (
+        {current === 'text' && (
           <>
             <div className="group">
               <button className="btn btn-sm" style={{ width: '100%' }} onClick={onAddText}>
@@ -506,9 +513,10 @@ export function CollagePanel({
             )}
           </>
         )}
+        {current === 'export' && <div className="export-tab">{footer}</div>}
       </div>
 
-      {footer}
+      {!phone && footer}
     </aside>
   )
 }

@@ -206,9 +206,11 @@ itself, so the side panel is never in the way:
 
 | | |
 | --- | --- |
-| Drag inside a tile | Move the photo within its frame. It keeps panning however far you drag — it never turns into something else halfway through. |
-| Pinch, or scroll | Zoom that photo in. At 100% a tile can only slide along one axis, because the photo exactly fills the frame in the other; zoom in and it moves freely. |
-| Double-tap | Put that tile back to how it started |
+| Tap a frame | Choose it. It takes a ring and its own toolbar. |
+| Drag inside the chosen frame | Move the photo within it. It keeps panning however far you drag — it never turns into something else halfway through. |
+| − / + on that toolbar, or scroll over it | Zoom the photo in its frame. At 100% a tile can only slide along one axis, because the photo exactly fills the frame in the other; zoom in and it moves freely. |
+| Reset on that toolbar | Put that tile back to how it started |
+| Double-tap | Enlarge the whole collage on that spot; again to see all of it |
 | Press and hold, then drag | Lift the photo out and drop it on another tile to swap the two |
 
 Swapping is a deliberate long press rather than a drag-past-the-edge, because
@@ -250,10 +252,57 @@ Undo covers all of it.
 
 The layout turns into a single column with the picture at the top, the roll
 under it within thumb reach, and the controls as a sheet at the bottom. The
-sheet starts closed — just its tabs and the export button — and slides up *over*
-the canvas when you open it rather than squeezing it, so the picture never
-changes size mid-edit. Tap a tab or the chevron to open it, the chevron again to
-close.
+sheet starts closed — just its tabs — and slides up *over* the canvas when you
+open it rather than squeezing it, so the picture never changes size mid-edit.
+Tap a tab or the chevron to open it, the chevron again to close.
+
+**The picture gets the screen.** On a 390 × 844 phone the collage canvas is
+378 × 504 — 58% of the display. It used to be 262 × 350, or 28%, with the rest
+spent on chrome. What changed:
+
+| Was | Now | |
+| --- | --- | --- |
+| Top bar 91px | 47px | one row; the app stops announcing its own name on every screen |
+| Export block 210px, always there | 0px | it is a tab of the sheet now — a menu you touch once, at the end |
+| Roll 118px | 81px | 56px thumbnails, with **Add** riding at the end instead of on a row of its own |
+| Frame toolbar lane 58px | 0px | it floats over the picture, and only while a frame is selected |
+| Status bar 29px | 0px | the roll already ticks the photos it has placed |
+
+**Gestures**, on the collage:
+
+| | |
+| --- | --- |
+| **Pinch** | Enlarge or shrink the whole collage. Always — it never means something else depending on what is selected. |
+| **Double-tap** | Jump to 2× on the spot; again to go back to the whole thing. Anywhere, including on a photo. |
+| **Drag** | Move the picture around. It stops at its own edges, so it cannot be flung out of sight. |
+| **Tap a photo, then drag it** | Reframe that photo inside its cell |
+| **Press and hold, then drag** | Lift a photo out and drop it on another to swap the two |
+| **− / + / Reset on the frame toolbar** | Zoom a photo inside its frame, or put it back |
+
+A chip in the corner shows the zoom and offers **Fit** whenever you are not
+looking at the whole collage; at fit it is not there at all. Zooming redraws
+the collage at a matching pixel count rather than magnifying what was already
+drawn, so a photo inspected at 3× is genuinely sharp.
+
+Double-tap used to mean two things — zoom on the background, put this photo
+back on a photo. Testing showed the first one was unreachable: a filled collage
+is photos edge to edge, so there is essentially no background left to tap.
+Putting a photo back is the **Reset** button on the frame's own toolbar, which
+was already there and says what it does.
+
+One finger means one thing at every zoom level: **inside the frame you have
+chosen it moves that photo, anywhere else it drags the whole picture.** The
+choosing is what keeps it unambiguous, and it is on screen — the chosen frame
+takes a ring and its own toolbar. It costs a tap before a photo can be moved,
+and it is what stops zooming in from being a trap: at 3× the tiles fill the
+screen, so if dragging a tile always moved its photo there would be nothing
+left to grab to get back.
+
+Reframing a photo *inside* its cell has no second pinch. An earlier build gave
+the pinch to the selected frame when your fingers landed on it; it read well
+written down and was unusable in the hand, because a frame is always selected
+and the first finger selects whatever it touches — so the same gesture did
+different things depending on state you could not see.
 
 Crop handles, perspective corners and the frame toolbar all grow on
 touchscreens, and the canvas swallows drags so the page never scrolls under

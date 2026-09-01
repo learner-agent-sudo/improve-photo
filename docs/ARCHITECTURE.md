@@ -397,6 +397,70 @@ the nine upright latin faces, with italics and latin-ext arriving only on
 demand. All nine are OFL 1.1, which permits exactly this redistribution;
 `src/fonts/LICENSE.md` carries the licence and the copyright holders.
 
+### The phone canvas, and what the chrome was costing it
+
+The collage canvas on a 390 x 844 phone was 262 x 350 - 27.9% of the display.
+Measuring where the other 72% went is what made the fix obvious, and the number
+that stood out was not the one anybody would have guessed: the export block was
+210px of permanently parked chrome, taller than the photo roll, holding a size
+menu, a format menu, a quality slider and a button that are touched once, at the
+very end of the work. It is now a tab of the sheet. The rest came from a top bar
+that wrapped to two lines, a 58px lane reserved for a toolbar that only exists
+while a frame is selected, a status line repeating what the roll already shows,
+and 72px thumbnails with their own button row underneath. The canvas is now
+378 x 504 - 57.9%, and 2.08x the area.
+
+The export controls move between a permanent footer and a tab by breakpoint,
+which is a change of *arrangement* rather than of styling, so it cannot be done
+in CSS: rendering both and hiding one would put two copies of every form control
+and every `id` in the document. `useMediaQuery` in `src/state/media.ts` reads the
+one breakpoint the app has, exported from the same file so it cannot drift from
+the stylesheet.
+
+### Zooming the view
+
+`view` is `{ s, x, y }` applied as a CSS transform on the frame, so a pinch is
+instant and never waits on the collage being redrawn. That alone would only
+magnify pixels that were already drawn, so `renderScale` follows the view once
+the fingers stop moving and multiplies the canvas backing store, which redraws
+the collage at a pixel count matching the zoom. A photo inspected at 3x is
+genuinely rendered at 3x, up to the same `MAX_CANVAS_EDGE` cap that bounds every
+other render.
+
+Pinch means one thing: enlarge or shrink the whole collage. An earlier version
+gave the pinch to the selected frame's own photo when the fingers landed inside
+it, keeping both zooms on one gesture. It is worth recording why that failed,
+because it reads perfectly well as a rule: a frame is *always* selected (entering
+collage mode selects the first one), and the first finger down selects whatever
+it touches - so by the time the second finger arrives, "the fingers are on the
+selected frame" is true almost every time, and the gesture did different things
+depending on state the user could not see. Reframing a photo inside its cell is
+now the `-`/`+` pair on the frame's own toolbar, which says what it does.
+
+Panning is clamped to the slack - the part of the scaled frame hanging off each
+edge - so the picture cannot be flung out of sight, and at fit there is no slack
+and it stays centred. Double-tap is counted from pointer timings rather than left
+to `dblclick`, because a canvas with `touch-action: none` does not raise one
+reliably on a phone.
+
+Double-tap also means only one thing, for a reason the browser test found rather
+than the design did: it was written to reset a photo when it landed on one and
+zoom the view otherwise, and the zoom half turned out to be unreachable, because
+a filled collage is photos edge to edge and has essentially no background left to
+land on. Resetting a photo is the Reset button already on the frame's toolbar.
+
+One cost only appears once both features exist together. Moving a photo inside
+its frame redraws that tile every frame, and while the view is enlarged the tile
+is being drawn at several times the pixel count - so the gesture that was cheap
+at fit becomes the most expensive thing in the application at 3x. The drag
+therefore drops `renderScale` back to 1 for its duration and restores it on
+release: the picture is moving, so nobody is reading its detail, and only the
+backing store changes, never the canvas's CSS size, so nothing on screen shifts.
+
+The stage also had to start clipping. Enlarging the frame is a transform, which
+does not affect layout, so at 3x the collage simply drew over the photo roll and
+the controls beneath it until `.stage-canvas-wrap` was given `overflow: hidden`.
+
 ### What is deliberately not there
 
 - **Stickers, frames and filters on top of the collage.** Stage 1 already

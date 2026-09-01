@@ -58,10 +58,12 @@ export function CollageTray({
             </div>
           </div>
         ))}
-      </div>
-      <div className="strip-foot">
-        <button className="btn btn-sm" onClick={open}>
-          + Add photos
+        {/* Adding photos rides at the end of the roll rather than sitting in a
+            row of its own. On a phone that row was 32px of chrome for a button
+            pressed once per session. */}
+        <button className="thumb-add" onClick={open} title="Add more photos">
+          <span aria-hidden="true">+</span>
+          <em>Add</em>
         </button>
       </div>
     </aside>
