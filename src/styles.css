@@ -1864,6 +1864,33 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .tile-sep { width: 1px; height: 20px; background: var(--line); margin: 0 3px; }
 
+/* The chosen frame's controls, as a fixed row at the top of the phone sheet. */
+.frame-bar {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  height: 42px;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--ink-850);
+}
+.frame-bar .tile-btn { min-width: 36px; height: 32px; }
+.frame-bar .tile-btn.wide { padding: 0 11px; }
+.frame-bar .tile-zoom { min-width: 42px; }
+.frame-bar-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--paper-4);
+  margin-right: 2px;
+  white-space: nowrap;
+}
+.frame-bar-hint {
+  font-size: 12px;
+  color: var(--paper-4);
+}
+
 /* Zoom of the whole collage. Only present once the view has left "fit", so a
    picture at its natural size carries no chrome at all. */
 .view-chip {
@@ -1931,11 +1958,13 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
     grid-template-rows: minmax(0, 1fr) auto;
     /* Space held for the closed sheet, so opening it does not resize the
        canvas underneath - a picture that jumps size mid-edit is disorienting.
-       Only the tab row is held now: the export block moved into a tab of its
-       own, which gave 166px of this back to the picture. */
+       The tab row plus the frame bar above it; the frame bar keeps its height
+       whether or not a frame is chosen, for the same reason. */
     padding-bottom: 44px;
     min-height: 0;
   }
+  /* Collage mode adds the frame bar above the tabs, so it holds 42px more. */
+  .workspace.collage-mode { padding-bottom: 86px; }
 
   /* The controls are a sheet: closed, just their tab bar and the export
      button; open, they slide up over the canvas rather than shrinking it. */
@@ -1967,16 +1996,18 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
   .panel-body { max-height: none; }
 
   .strip-head { display: none; }
-  .strip-list { padding: 6px 8px; gap: 6px; align-items: center; }
+  .strip-list { padding: 5px 8px; gap: 5px; align-items: center; }
   /* A roll of 72px squares plus a button row underneath came to 118px. These
-     are 56px, which still clears the 44px minimum touch target with room to
-     spare, and the add button rides along at the end. */
-  .thumb { width: 56px; }
+     are 48px, which still clears the 44px minimum touch target, and the add
+     button rides along at the end. Every row of chrome down here pushes the
+     picture further above the middle of the screen, so the roll gives back
+     what the frame bar takes. */
+  .thumb { width: 48px; }
   .thumb img { aspect-ratio: 1; }
   .thumb-meta { display: none; }
   .strip-foot { padding: 0 10px 7px; }
   .strip-foot .btn { height: 28px; font-size: 11.5px; }
-  .thumb-add { width: 56px; height: 56px; }
+  .thumb-add { width: 48px; height: 48px; }
 
   .panel .tabs { position: sticky; top: 0; z-index: 3; background: var(--ink-900); }
   .tab { height: 44px; font-size: 12.5px; }
@@ -1989,9 +2020,12 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
   .aspect-btn { height: 62px; }
   .chip { height: 32px; padding: 0 13px; }
   .tile-btn { min-width: 40px; height: 40px; }
-  .tile-tools { bottom: 8px; }
   .view-btn { min-width: 38px; height: 38px; }
   .view-chip { top: 10px; right: 10px; }
+
+  /* The frame controls live in the sheet here, not over the picture. */
+  .frame-bar { display: flex; }
+  .tile-tools { display: none; }
 
   .gesture-hint { display: none; }
 
@@ -2004,7 +2038,6 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
      It reserved 58px when the canvas was 350px tall; the canvas is now roughly
      twice that, and the toolbar only exists while a frame is selected. */
   .stage-canvas-wrap.collage { padding: 6px; }
-  .tile-tools { bottom: 10px; }
 
   .panel-foot { padding: 10px 12px 12px; }
   .panel-foot .field { margin-bottom: 8px; }
@@ -2033,7 +2066,6 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
   .undo-pair .btn { width: 34px; height: 34px; }
   .theme-btn { width: 34px; height: 34px; }
   .layout-grid { grid-template-columns: repeat(4, 1fr); }
-  .thumb { width: 68px; }
 
   /* Every row of chrome here is a row stolen from the picture. The privacy
      note is a reassurance, not a control, and the app says the same thing on

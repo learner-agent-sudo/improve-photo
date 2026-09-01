@@ -101,8 +101,61 @@ export function CollagePanel({
       key ?? `text:${Object.keys(patch).join()}`,
     )
 
+  const slot = selectedCell !== null ? doc.slots[selectedCell] : undefined
+  const framed = selectedCell !== null && !!slot?.photoId
+
+  const setSlot = (patch: Partial<typeof doc.slots[number]>, key: string) =>
+    onDoc({ slots: doc.slots.map((s, i) => (i === selectedCell ? { ...s, ...patch } : s)) }, key)
+
   return (
     <aside className={`panel${collapsed ? ' collapsed' : ''}`}>
+      {/*
+        The chosen frame's own controls, on a phone.
+
+        They used to float over the picture. That failed twice over: the sheet
+        opens from the bottom and covered them completely, and on a shorter
+        phone the canvas fills the stage, so the bar sat on the bottom of the
+        photograph rather than beside it. Here they are never covered, never on
+        top of the picture, and always in the same place. The row keeps its
+        height when no frame is chosen so that choosing one does not resize the
+        canvas underneath.
+      */}
+      {phone && (
+        <div className="frame-bar" role="toolbar" aria-label="Chosen frame">
+          {framed ? (
+            <>
+              <span className="frame-bar-label">Frame {selectedCell + 1}</span>
+              <button
+                className="tile-btn"
+                aria-label="Zoom out"
+                onClick={() => setSlot({ zoom: Math.max(1, slot!.zoom - 0.15) }, `zoom:${selectedCell}`)}
+              >
+                −
+              </button>
+              <span className="tile-zoom">{(slot!.zoom * 100).toFixed(0)}%</span>
+              <button
+                className="tile-btn"
+                aria-label="Zoom in"
+                onClick={() => setSlot({ zoom: Math.min(4, slot!.zoom + 0.15) }, `zoom:${selectedCell}`)}
+              >
+                +
+              </button>
+              <button
+                className="tile-btn wide"
+                onClick={() => setSlot({ zoom: 1, offsetX: 0, offsetY: 0 }, `reset:${selectedCell}`)}
+              >
+                Reset
+              </button>
+              <button className="tile-btn wide" onClick={() => onClearCell(selectedCell)}>
+                Empty
+              </button>
+            </>
+          ) : (
+            <span className="frame-bar-hint">Tap a photo in the collage to work on it</span>
+          )}
+        </div>
+      )}
+
       <div className="tabs" role="tablist">
         {tabs.map((t) => (
           <button
@@ -202,7 +255,7 @@ export function CollagePanel({
               </button>
             </div>
 
-            {selectedCell !== null && doc.slots[selectedCell]?.photoId && (
+            {!phone && selectedCell !== null && doc.slots[selectedCell]?.photoId && (
               <div className="group">
                 <h3 className="group-title">Frame {selectedCell + 1}</h3>
                 <Slider

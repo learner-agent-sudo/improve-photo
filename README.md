@@ -206,7 +206,7 @@ itself, so the side panel is never in the way:
 
 | | |
 | --- | --- |
-| Tap a frame | Choose it. It takes a ring and its own toolbar. |
+| Tap a frame | Choose it. It takes a ring, and its controls appear in the frame row. |
 | Drag inside the chosen frame | Move the photo within it. It keeps panning however far you drag — it never turns into something else halfway through. |
 | − / + on that toolbar, or scroll over it | Zoom the photo in its frame. At 100% a tile can only slide along one axis, because the photo exactly fills the frame in the other; zoom in and it moves freely. |
 | Reset on that toolbar | Put that tile back to how it started |
@@ -264,8 +264,8 @@ spent on chrome. What changed:
 | --- | --- | --- |
 | Top bar 91px | 47px | one row; the app stops announcing its own name on every screen |
 | Export block 210px, always there | 0px | it is a tab of the sheet now — a menu you touch once, at the end |
-| Roll 118px | 81px | 56px thumbnails, with **Add** riding at the end instead of on a row of its own |
-| Frame toolbar lane 58px | 0px | it floats over the picture, and only while a frame is selected |
+| Roll 118px | 59px | 48px thumbnails, with **Add** riding at the end instead of on a row of its own |
+| Frame toolbar lane 58px | 42px | a fixed row at the top of the sheet, never over the picture |
 | Status bar 29px | 0px | the roll already ticks the photos it has placed |
 
 **Gestures**, on the collage:
@@ -278,6 +278,18 @@ spent on chrome. What changed:
 | **Tap a photo, then drag it** | Reframe that photo inside its cell |
 | **Press and hold, then drag** | Lift a photo out and drop it on another to swap the two |
 | **− / + / Reset on the frame toolbar** | Zoom a photo inside its frame, or put it back |
+
+The frame you are working on has its own row — `FRAME 1 · − 100% + · Reset ·
+Empty` — sitting at the top of the control sheet, above the tabs. It is there
+whether the sheet is open or closed, it never covers the photograph, and it
+keeps its height when no frame is chosen so that choosing one does not resize
+the picture underneath.
+
+That row used to float over the picture instead, and it failed two ways at
+once. The sheet opens from the bottom of the screen and covered it completely —
+every button, on every phone size tested. And on a shorter phone, where the
+canvas fills the whole area, the bar sat *on* the bottom of the photograph
+rather than beside it, dark buttons on a dark picture.
 
 A chip in the corner shows the zoom and offers **Fit** whenever you are not
 looking at the whole collage; at fit it is not there at all. Zooming redraws

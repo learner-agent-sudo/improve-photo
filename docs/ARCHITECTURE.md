@@ -457,6 +457,31 @@ therefore drops `renderScale` back to 1 for its duration and restores it on
 release: the picture is moving, so nobody is reading its detail, and only the
 backing store changes, never the canvas's CSS size, so nothing on screen shifts.
 
+### Where a contextual control can actually live on a phone
+
+The chosen frame's controls floated over the picture, which is the obvious
+place for them and the wrong one, for a reason that only a hit test finds. A
+bottom sheet covers the bottom of the screen when it opens - that is what it is
+for - and the bottom of the screen is exactly where a floating toolbar sits. A
+probe that asks `document.elementFromPoint` at the centre of each button, rather
+than merely checking that the button is on screen, reported all four covered by
+`.panel-body` on every phone size tried. On a shorter phone there was a second
+failure underneath the first: the canvas fills the stage there, so the bar was
+drawn on the bottom of the photograph, dark buttons over a dark picture.
+
+Anything below the fold of an open sheet is coverable, so the controls have to
+be *part of* the sheet. They are now a fixed row above its tab bar, present in
+both the open and closed states, and the row keeps its height when no frame is
+chosen - otherwise choosing one would resize the canvas underneath, which is the
+same jump the closed sheet's reserved space exists to prevent.
+
+The row costs 42px of permanent chrome, which pushes the picture further above
+the middle of the screen, so the roll gives back what the row takes: 56px
+thumbnails to 48px, still clear of the 44px touch minimum. Finding that also
+turned up a stale `@media (max-width: 560px)` rule still setting `.thumb` to
+68px and quietly winning over the newer one - the roll had been 79px rather than
+the 59px the later rule asked for.
+
 The stage also had to start clipping. Enlarging the frame is a transform, which
 does not affect layout, so at 3x the collage simply drew over the photo roll and
 the controls beneath it until `.stage-canvas-wrap` was given `overflow: hidden`.
