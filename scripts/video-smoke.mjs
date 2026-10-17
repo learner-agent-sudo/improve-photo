@@ -98,9 +98,20 @@ try {
   if (outcome !== 'ready') throw new Error('cannot continue without an encoder')
   const make = page.locator('.panel-foot .btn-primary', { hasText: 'Make video' })
 
+  // GitHub's runners have no GPU and encode H.264 in software, so this is far
+  // slower than on a phone: 99 s on the first run here. Allow plenty, and say
+  // how far it got, so a slow run and a stuck one look different in the log.
   const started = Date.now()
   await make.click()
-  await page.waitForSelector('.reel-video', { timeout: 180000 })
+  const ticker = setInterval(async () => {
+    const pct = await page.locator('.busy-card span').first().textContent().catch(() => null)
+    if (pct) console.log(`  ${Math.round((Date.now() - started) / 1000)} s: ${pct.trim()}`)
+  }, 30000)
+  try {
+    await page.waitForSelector('.reel-video', { timeout: 480000 })
+  } finally {
+    clearInterval(ticker)
+  }
   console.log(`encoded in ${((Date.now() - started) / 1000).toFixed(1)} s`)
 
   // The file, straight from the page.

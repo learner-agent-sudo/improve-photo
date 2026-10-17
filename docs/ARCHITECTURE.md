@@ -212,6 +212,51 @@ orientation — V = 0 is the first uploaded row, the top of the photo — and on
 the composite flips, once, when it turns `vUv` into the output coordinate it
 feeds to the transform.
 
+### Colour mix, areas and saved looks: still one pass
+
+Both new kinds of edit were added inside the existing composite pass rather
+than as passes of their own, because the property that matters most - the
+export is pixel-identical to the preview, and the image is quantised to 8 bits
+once - only survives if every adjustment happens in the same place. Measured
+after the change: preview and a PNG export of the same edit differ by at most
+1/255 per channel, which is the dither.
+
+**The colour mix** runs after vibrance and saturation. A pixel's hue falls
+between two of the eight band centres, and the settings of those two bands are
+blended by where it sits between them; snapping to the nearest band instead
+would put a visible seam through any gradient that crosses a boundary. Hue
+turns are followed by restoring the pixel's luma, so moving yellow toward
+orange does not quietly darken it, and brightness is applied as a per-colour
+exposure in linear light. Near-greys are faded out of the mix by chroma: the
+hue of a white plate is sensor noise, and a mix that tinted it by whichever
+band the noise landed in would be the most visible flaw in the feature.
+
+**Areas** are positioned on the rectified photo: after perspective correction,
+before the quarter turns, mirroring, straightening and crop. That space is
+reached from output pixels by an affine map - everything in the framing chain
+except perspective, which sits on the far side of it - so the shader needs one
+extra matrix, and an area stays on the dish through re-crops, rotation,
+mirroring and collage tiles. Sizes are measured in fractions of the photo's
+long edge, so a circle stays round on a portrait. The effect is a gain in
+linear light at the same point as exposure, and overlapping areas are summed
+in log space so two of them compose the way two exposure changes would,
+regardless of order. The perspective tool draws the uncorrected photo, which
+has no rectified frame, so areas sit that view out. Four is the limit because
+beyond that the panel becomes a list nobody can manage on a phone.
+
+All of this was checked with a pixel test against the real engine before any
+interface existed: one band changes only its colour, greys are untouched, a
+hue turn keeps luma, an area follows a crop, a quarter turn and a mirror, and
+four areas apply at once.
+
+**Saved looks** are stored the way the built-in presets are: as offsets from
+the photo's Auto result, not as slider positions. Raw positions would carry
+one photo's exposure fix onto a photo that never needed it. Measured: a look
+saved on a photo Auto had corrected by -1 stop and applied to one Auto
+corrected by +1.4 lands at +1.7, which is the look's own +0.3 riding on each
+photo's correction. They live in localStorage, and whatever comes back from
+there is validated and clamped like any other untrusted input.
+
 ### Memory strategy
 
 Nine 12 MP bitmaps held at full resolution would be roughly half a gigabyte and
@@ -493,6 +538,54 @@ the controls beneath it until `.stage-canvas-wrap` was given `overflow: hidden`.
 - **Free-floating photos.** Every photo lives in a frame. It keeps the result
   tidy and the interaction unambiguous, which is what the meal-grid case wants.
 
+## Stage 3: video
+
+The aim was the cheapest useful version: photos you have already edited, as a
+short vertical video, made on the device. Not a timeline editor - Meta's free
+Edits app and CapCut already do that well, and a weaker copy would not be a
+reason to use this.
+
+**Encoding: WebCodecs and Mediabunny, not ffmpeg.wasm.** Browsers now expose
+the device's own video encoder (WebCodecs: Chrome 94, Safari 16.4, desktop
+Firefox 130, per MDN's compatibility data). That leaves only the container to
+write, which Mediabunny does in pure TypeScript under MPL-2.0; imported
+through one small module so the bundler keeps only the five pieces used, it
+is 51 kB gzipped and is downloaded only when video mode opens. The usual
+alternative, ffmpeg.wasm, is about 64 MB unpacked, GPL-licensed, and its fast
+multi-threaded build needs cross-origin isolation headers that GitHub Pages
+cannot send.
+
+**H.264 only.** It is what Instagram, TikTok and Xiaohongshu ask for. A browser
+without an H.264 encoder gets a plain explanation before anything is rendered,
+rather than a WebM file the platforms may not take.
+
+**No audio.** Safari only gained audio encoding in WebCodecs in version 26, so
+a soundtrack would exclude most iPhones in use, and every target platform has
+its own music library for adding sound at posting time.
+
+**One drawing function.** The live preview and every encoded frame are painted
+by the same `drawReelFrame`, so the preview cannot drift from the file. Photos
+are rendered through the normal pipeline from the original file, at the size
+the frame needs at full zoom, and only the photos on screen are held in
+memory: twenty full-size bitmaps would be several hundred megabytes on a
+phone, two is a few dozen. The "whole photo" backdrop is a 24-pixel copy
+stretched back up, a blur that works everywhere - canvas `filter` would be
+simpler, but Safari still ships it only behind a developer flag.
+
+**Testing an encoder the test browser does not have.** Open-source Chromium,
+which this project's local tests use, ships without H.264; it reports so, and
+the app shows its "cannot make video" message, which is itself worth having
+tested. Everything else was tested locally by forcing VP9 through the same
+pipeline and decoding the result with ffmpeg: 1080 x 1350, 135 frames at 30
+fps, fast start, each photo prepared and released exactly once, the right
+photo at each moment, a half-and-half mix mid-crossfade, the slow zoom
+growing a test disc by 10% (5% for whole-photo), and cancel stopping cleanly.
+The real H.264 path is tested by a workflow in the Google Chrome on GitHub's
+Ubuntu image, which decodes its frames with ffmpeg too. That workflow's first
+version had a hole worth recording: an all-black sample counted as "red"
+because the strongest channel of (0, 0, 0) is the first one listed. A colour
+now only counts when one channel clearly leads.
+
 ## Monitoring
 
 Healthchecks.io was the requirement, and it is a dead man's switch rather than
@@ -521,14 +614,27 @@ alerting, and a red run means only that the report itself could not be
 delivered. Before the secret is configured there is nobody to report to, so
 then a broken site does turn the run red.
 
-**Timing.** The schedule is minute 17 of each hour, because GitHub documents
-that scheduled runs are delayed, and can be dropped, at the start of the hour.
-On the Healthchecks.io side the recommended grace time (2 hours on a 1-hour
-period) is deliberately loose. It only governs how long a *missing* ping is
-tolerated, which is the case of GitHub's scheduler running late. A broken site
-sends an explicit `/fail` at the next visit regardless of the grace time. Each
-failure is re-checked once after 60 seconds before it is reported, so a CDN
-blip or a deploy landing mid-check does not page anyone.
+**Timing, and why GitHub's scheduler is not enough on its own.** The schedule
+is minute 17 of each hour, because GitHub documents that scheduled runs are
+delayed, and can be dropped, at the start of the hour. That turned out to be
+the least of it: in its first nine hours GitHub ran 1 of the 10 hourly checks
+it was due, 38 minutes late, and the Healthchecks.io check - set to a 2-hour
+grace on the assumption of occasional skips - went "down" twice with the site
+perfectly healthy. A monitor that cries wolf gets ignored, which is worse than
+none.
+
+The fix keeps everything above and changes only what starts a run. A free
+outside timer (cron-job.org, whose source is public) calls GitHub's
+`workflow_dispatch` API on the hour with a fine-grained token that has one
+permission, **Actions: write**, on one repository - the documented minimum
+for that endpoint. GitHub's own schedule stays as a backup. Without the timer
+the README recommends a 12-hour grace, so the alerts stay honest about what
+the scheduler can actually do; with it, 1 hour.
+
+A broken site sends an explicit `/fail` at the next visit regardless of the
+grace time - the grace only governs how long a *missing* ping is tolerated.
+Each failure is re-checked once after 60 seconds before it is reported, so a
+CDN blip or a deploy landing mid-check does not page anyone.
 
 **The ping URL is a secret** even though the check only ever reports *about* a
 public site: whoever holds it can send "all is well" pings, which would hide a
@@ -594,6 +700,31 @@ Monitoring:
   (free for public repositories on standard runners)
 - [GitHub runner images — Ubuntu 24.04](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
   (Google Chrome preinstalled)
+- [GitHub Docs — Create a workflow dispatch event](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
+  and the [fine-grained token permission data](https://github.com/github/docs/blob/main/src/github-apps/data/fpt-2022-11-28/fine-grained-pat-permissions.json)
+  behind it (Actions, write); [pre-filling a token by URL](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#pre-filling-fine-grained-personal-access-token-details-using-url-parameters);
+  [GitHub changelog, February 2026](https://github.blog/changelog/2026-02-19-workflow-dispatch-api-now-returns-run-ids)
+  (204 unless run details are asked for)
+- [cron-job.org source code](https://github.com/pschlan/cron-job.org) (custom
+  method, body and headers in the job editor)
+
+Video:
+
+- WebCodecs support - [MDN compatibility data for `VideoEncoder`](https://github.com/mdn/browser-compat-data/blob/main/api/VideoEncoder.json)
+  (Chrome 94, Safari 16.4, Firefox 130, not Firefox for Android) and
+  [`AudioEncoder`](https://github.com/mdn/browser-compat-data/blob/main/api/AudioEncoder.json)
+  (Safari 26)
+- [Mediabunny](https://github.com/Vanilagy/mediabunny) (MPL-2.0); ffmpeg.wasm
+  core size and licence from the [npm registry](https://www.npmjs.com/package/@ffmpeg/core)
+  (GPL-2.0-or-later, about 64 MB unpacked)
+- Cross-origin isolation needs response headers - [web.dev guide](https://web.dev/articles/cross-origin-isolation-guide);
+  GitHub Pages cannot set them - [GitHub community discussion #13309](https://github.com/orgs/community/discussions/13309)
+- Reels specifications, which agree on 1080 x 1920, 9:16, H.264 MP4, 30 fps
+  but vary on bitrate (3.5-12 Mbit/s): [SocialPilot](https://www.socialpilot.co/instagram-marketing/instagram-video-size),
+  [ContentStudio](https://contentstudio.io/blog/instagram-reel-size)
+- Canvas `filter` in Safari only behind a flag - [MDN compatibility data](https://github.com/mdn/browser-compat-data/blob/main/api/CanvasRenderingContext2D.json)
+- [Meta's Edits app](https://later.com/blog/instagram-edits-app/) - free,
+  watermark-free video editing
 
 Image processing:
 

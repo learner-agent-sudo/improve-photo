@@ -32,11 +32,14 @@ export function ReelStage({
   photos,
   settings,
   resultUrl,
+  paused = false,
   onError,
 }: {
   photos: Photo[]
   settings: ReelSettings
   resultUrl: string | null
+  /** True while the video is being made: the encoder needs the processor more. */
+  paused?: boolean
   onError: (message: string) => void
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
@@ -156,7 +159,7 @@ export function ReelStage({
   // Playback: wall-clock time, looping, like the apps play it.
   useEffect(() => {
     if (resultUrl) return
-    if (!playing || duration <= 0) {
+    if (!playing || paused || duration <= 0) {
       draw(timeRef.current)
       return
     }
@@ -173,7 +176,7 @@ export function ReelStage({
     }
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
-  }, [playing, duration, draw, resultUrl, ready])
+  }, [playing, paused, duration, draw, resultUrl, ready])
 
   // Fewer photos or shorter slots can leave the playhead past the new end.
   useEffect(() => {

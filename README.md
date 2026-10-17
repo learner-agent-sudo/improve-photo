@@ -5,11 +5,13 @@ product shoot; Darkroom measures each one, corrects what is actually wrong with
 it, and exports at the exact size Xiaohongshu, Instagram or your own website
 expects.
 
-Two modes, switched in the top bar:
+Three modes, switched in the top bar:
 
 - **Enhance** — fix one photo, then export it at the size a platform wants.
 - **Collage** — arrange several photos into one composed image, add text, export
   that.
+- **Video** — turn the edited photos into a short MP4 for Reels, Stories,
+  TikTok or Xiaohongshu.
 
 ---
 
@@ -117,11 +119,13 @@ About five minutes, all in the browser.
    signed up with.
 2. **Set the check up for this site.** Open it, rename it (e.g. *Darkroom
    site*), then under **Schedule** choose **Simple** and set **Period** to
-   **1 hour** and **Grace Time** to **2 hours**.
-   *Why 2 hours:* GitHub's scheduler runs late, and occasionally skips a run,
-   when it is busy. The grace time only decides how long a *missing* report
-   is tolerated. A broken site is reported at once by the next hourly visit,
-   whatever the grace time.
+   **1 hour** and **Grace Time** to **12 hours** - or to **1 hour** once you
+   have done the timer below.
+   *Why so long without the timer:* GitHub's own scheduler is unreliable. In
+   its first nine hours here it ran **1 of the 10** hourly checks it was due,
+   and that one 38 minutes late. The grace time only
+   decides how long a *missing* report is tolerated; a broken site is still
+   reported at once whenever a check does run.
 3. **Copy the check's ping URL.** It looks like
    `https://hc-ping.com/` followed by a long code.
 4. **Give it to GitHub as a secret.** In this repository go to **Settings →
@@ -132,6 +136,49 @@ About five minutes, all in the browser.
 5. **Test it.** Go to **Actions → Site health check → Run workflow**. Within a
    minute the check on Healthchecks.io should turn green, and its log shows
    what was checked.
+
+### Making it run on the hour (recommended)
+
+GitHub's scheduler is best-effort - its documentation says scheduled runs can
+be delayed and, under load, dropped - and in practice it skipped most of them.
+The dependable fix is a free outside timer that asks GitHub to run the check
+every hour, using GitHub's own "run this workflow" API. About ten minutes.
+
+1. **Make a token that can only start workflows in this repository.** This
+   link opens GitHub's form already filled in - name, a one-year expiry, and the
+   single permission it needs, **Actions: Read and write**:
+   [create the token](https://github.com/settings/personal-access-tokens/new?name=Health+check+timer&description=Lets+cron-job.org+start+the+hourly+site+health+check.+Actions+only.&target_name=learner-agent-sudo&expires_in=366&actions=write).
+   One thing the link cannot fill in: under **Repository access** choose
+   **Only select repositories** and pick **improve-photo**. Then **Generate
+   token** and copy it - GitHub shows it only once.
+2. **Sign up at [cron-job.org](https://cron-job.org)** (free) and choose
+   **Create cronjob**:
+   - **Title:** `Darkroom health check`
+   - **URL:**
+     `https://api.github.com/repos/learner-agent-sudo/improve-photo/actions/workflows/healthcheck.yml/dispatches`
+   - **Execution schedule:** every 60 minutes.
+   - On the **Advanced** tab:
+     - **Request method:** `POST`
+     - **Request body:** `{"ref":"claude/zen-planck-8cyrm7"}`
+     - **Headers** (key, then value):
+
+       | Key | Value |
+       | --- | --- |
+       | `Authorization` | `Bearer ` followed by the token from step 1 |
+       | `Accept` | `application/vnd.github+json` |
+       | `X-GitHub-Api-Version` | `2022-11-28` |
+       | `Content-Type` | `application/json` (cron-job.org offers to add this one for you) |
+3. **Press Test run.** The response should be **204** - GitHub's "accepted,
+   nothing more to say" ([GitHub's API docs](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)). A run then appears under **Actions → Site health check**.
+   Save the cronjob.
+4. **Tighten Healthchecks.io's Grace Time to 1 hour.** With checks arriving on
+   the hour, a missing one now means something is really wrong.
+
+What the token can and cannot do: it can start, re-run and cancel workflow
+runs in this one repository. It cannot read or change the code, see secrets,
+or touch any other repository. If it ever leaks, delete it under **GitHub →
+Settings → Developer settings → Personal access tokens** and make another.
+GitHub's own scheduled run stays in place as a backup.
 
 ### Things worth knowing
 
@@ -171,6 +218,51 @@ noise reduction, vignette and grain.
 Seven presets sit on top of Auto rather than replacing it — Auto fixes what is
 objectively wrong with the file, the preset applies the taste. So *Dish* behaves
 sensibly whether the shot was taken in daylight or under restaurant tungsten.
+
+### One colour at a time
+
+**Colour → Colour mix.** Pick one of eight colours - red, orange, yellow,
+green, aqua, blue, purple, magenta - and change only that colour's hue,
+saturation and brightness. Pull orange brightness down on a plate lit by a
+tungsten lamp, push green saturation for herbs, or turn yellow toward orange
+for richer bread and fried food. A dot under a swatch marks a colour you have
+changed.
+
+Two details keep it from looking processed. Neighbouring colours blend into
+each other rather than switching at a hard boundary, so a gradient across
+orange does not break into a visible edge. And whites and greys are left out
+entirely: a white plate's "hue" is just noise, and a mix that tinted it would
+be the first thing anyone noticed.
+
+### Brighten or darken one part
+
+**Areas** (a tab, and a tool on the photo). Add a **circle** to lift the dish
+and leave the table alone, or a **gradient** to tame a bright window on one
+side or a busy background at the top. Up to four per photo, each with its own
+**brightness** and **warmth**, a soft edge, and an option to change the
+outside instead.
+
+Drag the middle to move one, the outer dots to change its shape, or use the
+**Size** slider, which is easier with a thumb. On a phone, adding an area puts
+the controls away so the new circle is in view; tap **Areas** to bring the
+sliders back.
+
+Areas stick to the photo, not to the screen. Re-crop, straighten or rotate
+afterwards and the circle stays on the dish - and it comes along into collage
+tiles too.
+
+### Your own looks
+
+**Light → My looks → Save this photo's look** keeps the sliders and colour mix
+under a name, so the next photo is one tap. Like the built-in presets, a look is
+stored as a change *from Auto* rather than as fixed slider positions, so "my
+warm dinner look" suits a bright photo and a dark one alike instead of
+carrying one photo's exposure fix onto the next. Looks live in this browser
+only.
+
+**Apply to all** now copies the colour mix as well as the sliders. Areas stay
+with the photo they were drawn on, because where the dish sits differs from
+shot to shot.
 
 ## AI review (optional, off by default)
 
@@ -316,13 +408,49 @@ Fonts are waited on before export, so what you download matches what you saw.
 
 Undo covers all of it.
 
+## Video
+
+Switch to **Video** in the top bar to turn the edited photos into a short MP4
+for Reels, Stories, TikTok or Xiaohongshu.
+
+- **Which photos, and in what order.** Every photo starts in the video. Tap one
+  in the roll to leave it out or put it back; the numbers show the play order.
+  **Photos** in the panel moves them earlier or later.
+- **Shape.** The same platform-named shapes as the collage. Every one is 1080
+  pixels on its short edge, so Reel / Story is 1080 × 1920.
+- **Each photo stays** 1.5, 2.5 or 4 seconds, with a **slow zoom** (each photo
+  drifts a little, so it reads as video rather than a frozen frame) or **still**,
+  and a **crossfade** or a **cut** between them.
+- **Fill the frame** crops each photo to the shape. **Whole photo** shows all
+  of it on a soft, blurred copy of itself, which suits wide shots in a tall
+  video.
+
+The preview plays in the app using the same drawing code that makes the file,
+so what you watch is what you get. **Make video** renders each photo from the
+original file at the size the video needs, then encodes it on your device.
+Nothing is uploaded. When it is done, **Share or save…** on a phone puts it
+straight into your photos (Share → Save Video), and **Download** works
+everywhere.
+
+**There is no sound, on purpose.** Instagram, TikTok and Xiaohongshu each have
+their own music library for adding a track when you post. It also avoids a
+real limitation: browsers on older iPhones cannot encode audio at all.
+
+It needs a browser with an H.264 video encoder: recent Chrome and Edge, and
+Safari on an up-to-date iPhone or Mac. Where there is none, the panel says so
+rather than failing halfway. A [workflow](.github/workflows/video-smoke.yml)
+makes a test video in real Google Chrome whenever the video code changes, and
+attaches it to the run so the actual output can be watched.
+
 ## On a phone
 
 The layout turns into a single column with the picture at the top, the roll
 under it within thumb reach, and the controls as a sheet at the bottom. The
 sheet starts closed — just its tabs — and slides up *over* the canvas when you
 open it rather than squeezing it, so the picture never changes size mid-edit.
-Tap a tab or the chevron to open it, the chevron again to close.
+Tap a tab or the chevron to open it. With it open, tapping another tab switches
+to it; tapping the tab already showing, or the chevron, closes it. (Earlier,
+any tab tap closed an open sheet, so every switch took two taps.)
 
 **The picture gets the screen.** On a 390 × 844 phone the collage canvas is
 378 × 504 — 58% of the display. It used to be 262 × 350, or 28%, with the rest
@@ -492,14 +620,15 @@ publicly. If you need the metadata kept, this tool is the wrong one.
 | `A` / `Esc` | Adjust tool |
 | `C` | Crop tool |
 | `P` | Perspective tool |
+| `L` | Areas tool |
 | `\` | Toggle the before/after wipe |
 | `Ctrl`/`Cmd` + `Z` | Undo |
 | `Ctrl`/`Cmd` + `Shift` + `Z` | Redo |
-| Double-tap a collage tile | Reset that tile's framing |
+| Double-tap the collage | Enlarge on that spot; again to see all of it |
 | Long-press a collage tile | Lift it out to swap with another |
 | `↑` / `↓` | Previous / next photo |
 | `Ctrl`/`Cmd` + `V` | Paste an image from the clipboard |
-| Arrow keys | Nudge a focused perspective corner (`Shift` for bigger steps) |
+| Arrow keys | Nudge a focused perspective corner or area handle (`Shift` for bigger steps) |
 | Double-click a slider | Reset that one control |
 | Drag on the image | Reposition the crop, when the crop is tighter than the frame |
 | Drag the divider | Move the before/after wipe |
@@ -529,6 +658,12 @@ These are real and worth knowing before you rely on the tool.
 - **Very large files.** Exports are capped at 8192 px on the long edge and 40
   megapixels, because browsers cap canvas sizes and exceeding them fails
   silently rather than loudly.
+- **Video needs an H.264 encoder in the browser.** Chrome, Edge and recent
+  Safari have one; Firefox on Android has no video encoding at all, and
+  open-source Chromium builds lack H.264. Videos are capped at 30 photos, and
+  making one on a phone takes a little while and warms it up.
+- **Saved looks live in one browser.** They are not synced between devices,
+  and clearing the browser's site data clears them.
 
 ## A note on photos taken from the internet
 
@@ -559,6 +694,8 @@ src/
     renderer.ts    WebGL2 pipeline
     targets.ts     export sizes, grouped and named by platform
     export.ts      full-resolution render and encode
+    reel.ts        video: timeline, frame drawing, and encoding
+    mp4.ts         the few parts of Mediabunny the video uses, loaded on demand
   ai/              optional Gemini review - proposes slider values, never pixels
     types.ts       the proposal shape, and which sliders the model may touch
     gemini.ts      request building, and hard validation of whatever comes back
@@ -569,12 +706,14 @@ src/
   fonts/           their woff2 subsets, and the OFL licence
   state/
     photos.ts      loading, memory strategy, re-decoding for export
+    looks.ts       saved looks, stored locally and checked on the way back in
     theme.ts       light / dark / follow-the-device, stored locally
   components/      the interface
 proxy/
   cloudflare-worker.js   keeps the API key off the page, and works around CORS
 scripts/
   healthcheck.sh   visits the live site and reports to Healthchecks.io (hourly, via Actions)
+  video-smoke.mjs  makes a video in real Chrome and checks the file (via Actions)
 ```
 
 `src/engine` is deliberately free of any UI. Stage 2 renders every collage tile

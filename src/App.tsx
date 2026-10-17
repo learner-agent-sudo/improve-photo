@@ -1091,6 +1091,7 @@ export default function App() {
             photos={reelIncluded}
             settings={reel}
             resultUrl={reelResult?.url ?? null}
+            paused={reelProgress !== null}
             onError={reportError}
           />
           <ReelPanel

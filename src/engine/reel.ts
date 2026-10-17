@@ -107,8 +107,8 @@ export interface ReelItem {
 /**
  * The backdrop for "whole photo" framing. Scaling a 24 px copy back up with
  * smoothing gives a blur that works in every browser, unlike ctx.filter, which
- * older Safari does not support - and it is computed once per photo, not per
- * frame.
+ * Safari still ships only behind a developer flag - and it is computed once
+ * per photo, not per frame.
  */
 export function makeBackdrop(image: CanvasImageSource, w: number, h: number): HTMLCanvasElement | OffscreenCanvas {
   const bw = w >= h ? 24 : Math.max(2, Math.round((24 * w) / h))
