@@ -622,10 +622,10 @@ then a broken site does turn the run red.
 **Timing, and why GitHub's scheduler is not enough on its own.** The schedule
 is minute 17 of each hour, because GitHub documents that scheduled runs are
 delayed, and can be dropped, at the start of the hour. That turned out to be
-the least of it: in its first nine hours GitHub ran 1 of the 10 hourly checks
-it was due, 38 minutes late, and the Healthchecks.io check - set to a 2-hour
-grace on the assumption of occasional skips - went "down" twice with the site
-perfectly healthy. A monitor that cries wolf gets ignored, which is worse than
+the least of it: in its first fourteen hours GitHub ran 3 of the 14 hourly
+checks it was due, each 15 to 38 minutes late, and the Healthchecks.io check -
+set to a 2-hour grace on the assumption of occasional skips - went "down"
+with the site perfectly healthy. A monitor that cries wolf gets ignored, which is worse than
 none.
 
 The fix keeps everything above and changes only what starts a run. A free

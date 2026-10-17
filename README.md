@@ -122,8 +122,9 @@ About five minutes, all in the browser.
    **1 hour** and **Grace Time** to **12 hours** - or to **1 hour** once you
    have done the timer below.
    *Why so long without the timer:* GitHub's own scheduler is unreliable. In
-   its first nine hours here it ran **1 of the 10** hourly checks it was due,
-   and that one 38 minutes late. The grace time only
+   its first fourteen hours here it ran **3 of the 14** hourly checks it was
+   due, each between 15 and 38 minutes late - roughly one every four or five
+   hours. The grace time only
    decides how long a *missing* report is tolerated; a broken site is still
    reported at once whenever a check does run.
 3. **Copy the check's ping URL.** It looks like
