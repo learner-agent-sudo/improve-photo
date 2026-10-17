@@ -104,6 +104,24 @@ export class Exporter {
     }
   }
 
+  /**
+   * Renders the edited photo and hands it back as a bitmap rather than a file:
+   * the video maker draws these onto its own frames. Same pipeline, same
+   * limits, so a photo in a video looks exactly like the photo exported.
+   */
+  async renderBitmap(bitmap: ImageBitmap, edit: Edit, longEdge: number, seed = 17): Promise<ImageBitmap> {
+    this.renderer.setImage(bitmap)
+    let [w, h] = this.renderer.outputSizeFor(edit, longEdge)
+    const long = Math.max(w, h)
+    if (long > MAX_EXPORT_EDGE) {
+      const s = MAX_EXPORT_EDGE / long
+      w = Math.max(1, Math.round(w * s))
+      h = Math.max(1, Math.round(h * s))
+    }
+    this.renderer.render(w, h, edit, { seed })
+    return createImageBitmap(this.canvas)
+  }
+
   dispose() {
     this.renderer.dispose()
   }

@@ -1425,6 +1425,111 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
 .toggle-row input { width: 16px; height: 16px; accent-color: var(--amber); }
 
 /* --------------------------------------------------------------------------
+   Video
+   -------------------------------------------------------------------------- */
+
+/* No tool rail over the video preview, so it does not need the rail's lane. */
+.stage-canvas-wrap.reel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 22px 26px 18px;
+}
+.reel-frame canvas { background: #0f0e0c; }
+.reel-video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 3px;
+  background: #0f0e0c;
+  box-shadow: 0 0 0 1px var(--frame-ring), var(--shadow-lg);
+}
+.reel-empty { margin: 0; color: var(--paper-3); font-size: 13px; }
+
+.reel-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  min-width: 220px;
+}
+.reel-play { width: 34px; padding: 0; flex: none; font-size: 11px; }
+.reel-scrub { flex: 1; min-width: 0; accent-color: var(--amber); }
+.reel-clock {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--paper-2);
+  background: var(--float-bg);
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
+/* The roll in video mode: numbered in play order; left-out photos fade. */
+.reel-thumb { padding: 0; cursor: pointer; }
+.reel-thumb img { aspect-ratio: 1; }
+.reel-thumb.out img { opacity: 0.35; filter: grayscale(0.7); }
+.reel-badge {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--amber);
+  color: var(--on-amber);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+.reel-thumb.out .reel-badge { background: var(--ink-700); color: var(--paper-3); }
+
+.reel-order { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.reel-order li {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 6px;
+}
+.reel-order li.out { opacity: 0.5; }
+.reel-order img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; }
+.reel-order-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--paper-2);
+}
+.reel-order-name b { font-family: var(--font-mono); color: var(--amber-text); margin-right: 4px; }
+.reel-order .icon-btn { width: 34px; height: 34px; padding: 0; }
+.reel-include { display: grid; place-items: center; width: 34px; height: 34px; cursor: pointer; }
+.reel-include input { width: 18px; height: 18px; accent-color: var(--amber); }
+
+.reel-summary {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--paper-2);
+}
+.reel-warn { color: var(--amber-text); margin: 0 0 8px; }
+.seg.three { grid-template-columns: repeat(3, 1fr); }
+
+.progress {
+  width: 220px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ink-700);
+  overflow: hidden;
+}
+.progress i { display: block; height: 100%; background: var(--amber); }
+
+/* --------------------------------------------------------------------------
    Perspective overlay
    -------------------------------------------------------------------------- */
 
@@ -2157,6 +2262,9 @@ input[type='range']:disabled { opacity: 0.35; cursor: not-allowed; }
      It reserved 58px when the canvas was 350px tall; the canvas is now roughly
      twice that, and the toolbar only exists while a frame is selected. */
   .stage-canvas-wrap.collage { padding: 6px; }
+  .stage-canvas-wrap.reel { padding: 8px 10px; gap: 8px; }
+  .reel-order .icon-btn { width: 40px; height: 40px; }
+  .reel-include { width: 40px; height: 40px; }
 
   .panel-foot { padding: 10px 12px 12px; }
   .panel-foot .field { margin-bottom: 8px; }

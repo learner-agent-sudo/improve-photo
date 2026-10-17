@@ -1,0 +1,44 @@
+# Makes a short video in real Google Chrome and checks the file.
+#
+# The video maker depends on the browser's H.264 encoder, which open-source
+# Chromium does not have, so it cannot be tested anywhere but a real Chrome.
+# GitHub's Ubuntu image includes one. See scripts/video-smoke.mjs for what is
+# checked. Runs when the video code changes, and on demand.
+name: Video smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - src/engine/reel.ts
+      - src/engine/mp4.ts
+      - src/engine/renderer.ts
+      - src/engine/shaders.ts
+      - src/components/Reel*.tsx
+      - scripts/video-smoke.mjs
+      - .github/workflows/video-smoke.yml
+      - package-lock.json
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    # Pinned rather than ubuntu-latest: the test uses the Google Chrome that
+    # GitHub preinstalls on this image.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # The test driver only. It uses the runner's own Chrome, so no browser
+      # download, and --no-save keeps it out of the app's dependencies.
+      - run: npm install --no-save playwright@1.56.1
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - run: node scripts/video-smoke.mjs

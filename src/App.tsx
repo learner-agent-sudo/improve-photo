@@ -25,7 +25,20 @@ import {
 } from './engine/collage'
 import { exportCollage, type CollageSource } from './engine/collageRender'
 import { Exporter, saveBlob } from './engine/export'
-import { aspectRatio, centredCrop, framedSize, outputToFrame, resolveCrop } from './engine/geometry'
+import { aspectRatio, centredCrop, cropPixelSize, framedSize, outputToFrame, resolveCrop } from './engine/geometry'
+import {
+  canMakeReel,
+  DEFAULT_REEL,
+  encodeReel,
+  makeBackdrop,
+  MAX_REEL_PHOTOS,
+  ReelCancelled,
+  reelSize,
+  type ReelSettings,
+} from './engine/reel'
+import { ReelExport, ReelPanel } from './components/ReelPanel'
+import { ReelStage } from './components/ReelStage'
+import { ReelTray } from './components/ReelTray'
 import { apply } from './engine/matrix'
 import { applyPreset, PRESETS } from './engine/presets'
 import { TARGETS } from './engine/targets'
@@ -46,6 +59,22 @@ import { loadLooks, makeLook, saveLooks, type Look } from './state/looks'
 
 let toastId = 0
 
+/**
+ * A stable number per edit object. Edits are replaced, never mutated, so a new
+ * object means the photo changed - which is how a finished video knows it no
+ * longer matches what is on screen.
+ */
+const editIds = new WeakMap<object, number>()
+let nextEditId = 0
+const editId = (e: object) => {
+  let id = editIds.get(e)
+  if (id === undefined) {
+    id = ++nextEditId
+    editIds.set(e, id)
+  }
+  return id
+}
+
 /** Consecutive changes with the same key inside this window collapse into one undo step. */
 const COALESCE_MS = 700
 const HISTORY_LIMIT = 80
@@ -63,11 +92,21 @@ export default function App() {
   const [tool, setTool] = useState<Tool>('adjust')
   const [selectedArea, setSelectedArea] = useState<string | null>(null)
   const [looks, setLooks] = useState<Look[]>(() => loadLooks())
+
+  // --- video ------------------------------------------------------------------
+  const [reel, setReel] = useState<ReelSettings>(DEFAULT_REEL)
+  /** Every photo id in video order, including the ones left out. */
+  const [reelOrder, setReelOrder] = useState<string[]>([])
+  const [reelOff, setReelOff] = useState<Set<string>>(() => new Set())
+  const [reelSupported, setReelSupported] = useState<boolean | null>(null)
+  const [reelProgress, setReelProgress] = useState<number | null>(null)
+  const [reelResult, setReelResult] = useState<{ blob: Blob; url: string; name: string; signature: string } | null>(null)
+  const reelAbort = useRef<AbortController | null>(null)
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings())
   const [aiDialog, setAiDialog] = useState(false)
 
   const [theme, setTheme] = useState<Theme>(() => loadTheme())
-  const [mode, setMode] = useState<'enhance' | 'collage'>('enhance')
+  const [mode, setMode] = useState<'enhance' | 'collage' | 'video'>('enhance')
   // On a phone the controls start out of the way, so the picture gets the
   // screen. The class is inert above the phone breakpoint.
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -791,6 +830,138 @@ export default function App() {
     setMode('collage')
   }, [])
 
+  // Keep the video order in step with the roll: photos removed drop out,
+  // photos added join at the end.
+  useEffect(() => {
+    setReelOrder((prev) => {
+      const ids = photos.map((p) => p.id)
+      const present = new Set(ids)
+      const kept = prev.filter((id) => present.has(id))
+      const known = new Set(kept)
+      const next = [...kept, ...ids.filter((id) => !known.has(id))]
+      return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next
+    })
+  }, [photos])
+
+  const reelPhotos = useMemo(() => {
+    const byId = new Map(photos.map((p) => [p.id, p]))
+    return reelOrder.map((id) => byId.get(id)).filter((p): p is Photo => !!p)
+  }, [photos, reelOrder])
+  const reelIncluded = useMemo(
+    () => reelPhotos.filter((p) => !reelOff.has(p.id)).slice(0, MAX_REEL_PHOTOS),
+    [reelPhotos, reelOff],
+  )
+  const reelSignature =
+    JSON.stringify(reel) + '|' + reelIncluded.map((p) => `${p.id}:${editId(p.edit)}`).join(',')
+
+  // A finished video that no longer matches the settings or the photos is
+  // thrown away rather than offered for download.
+  useEffect(() => {
+    if (reelResult && reelResult.signature !== reelSignature) {
+      URL.revokeObjectURL(reelResult.url)
+      setReelResult(null)
+    }
+  }, [reelSignature, reelResult])
+
+  // Ask the browser once per shape whether it can encode this video at all.
+  useEffect(() => {
+    if (mode !== 'video') return
+    let live = true
+    setReelSupported(null)
+    void canMakeReel(reel.aspect).then((ok) => live && setReelSupported(ok))
+    return () => {
+      live = false
+    }
+  }, [mode, reel.aspect])
+
+  const moveInReel = useCallback((id: string, by: -1 | 1) => {
+    setReelOrder((prev) => {
+      const i = prev.indexOf(id)
+      const j = i + by
+      if (i < 0 || j < 0 || j >= prev.length) return prev
+      const next = prev.slice()
+      ;[next[i], next[j]] = [next[j], next[i]]
+      return next
+    })
+  }, [])
+
+  const toggleInReel = useCallback((id: string) => {
+    setReelOff((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const makeReel = useCallback(async () => {
+    const list = reelIncluded
+    if (list.length === 0) return
+    const signature = reelSignature
+    const ctl = new AbortController()
+    reelAbort.current = ctl
+    setReelProgress(0)
+    let exporter: Exporter | null = null
+    try {
+      exporter = new Exporter()
+      const ex = exporter
+      const blob = await encodeReel({
+        count: list.length,
+        settings: reel,
+        signal: ctl.signal,
+        onProgress: setReelProgress,
+        // Each photo is rendered from the original file, with its edit, at
+        // the size the video needs - the same path a photo export takes.
+        prepare: async (i, longEdgeFor) => {
+          const p = list[i]
+          const [cw, ch] = cropPixelSize(p.preview.width, p.preview.height, p.edit.geometry)
+          const long = longEdgeFor(cw / ch)
+          const bitmap = await decodeForExport(p, long)
+          try {
+            const image = await ex.renderBitmap(bitmap, p.edit, long, p.seed)
+            return { image, width: image.width, height: image.height, backdrop: makeBackdrop(image, image.width, image.height) }
+          } finally {
+            bitmap.close()
+          }
+        },
+        release: (item) => (item.image as ImageBitmap).close?.(),
+      })
+      const [w, h] = reelSize(reel.aspect)
+      setReelResult((prev) => {
+        if (prev) URL.revokeObjectURL(prev.url)
+        return { blob, url: URL.createObjectURL(blob), name: `darkroom-video-${w}x${h}.mp4`, signature }
+      })
+      notify('ok', 'Your video is ready.')
+    } catch (err) {
+      if (err instanceof ReelCancelled) notify('info', 'Stopped. Nothing was saved.')
+      else notify('error', `The video could not be made: ${(err as Error).message}`)
+    } finally {
+      exporter?.dispose()
+      reelAbort.current = null
+      setReelProgress(null)
+    }
+  }, [reelIncluded, reelSignature, reel, notify])
+
+  const canShareFiles = useMemo(() => {
+    try {
+      const probe = new File([new Uint8Array(1)], 'x.mp4', { type: 'video/mp4' })
+      return typeof navigator !== 'undefined' && !!navigator.canShare?.({ files: [probe] })
+    } catch {
+      return false
+    }
+  }, [])
+
+  const shareReel = useCallback(async () => {
+    if (!reelResult) return
+    const file = new File([reelResult.blob], reelResult.name, { type: 'video/mp4' })
+    try {
+      await navigator.share({ files: [file], title: 'Video from Darkroom' })
+    } catch (err) {
+      // Closing the share sheet is not an error worth reporting.
+      if ((err as Error).name !== 'AbortError') notify('error', `Could not share: ${(err as Error).message}`)
+    }
+  }, [reelResult, notify])
+
   const selectPhoto = useCallback((id: string) => {
     setSelectedId(id)
     setTool('adjust')
@@ -802,7 +973,9 @@ export default function App() {
         <div className="wordmark">
           <span className="lens" />
           <h1>Darkroom</h1>
-          <small>{mode === 'collage' ? 'Stage 2 · collage' : 'Stage 1 · single photo'}</small>
+          <small>
+            {mode === 'collage' ? 'Stage 2 · collage' : mode === 'video' ? 'Stage 3 · video' : 'Stage 1 · single photo'}
+          </small>
         </div>
 
         {photos.length > 0 && (
@@ -822,6 +995,14 @@ export default function App() {
               onClick={enterCollage}
             >
               Collage
+            </button>
+            <button
+              role="tab"
+              className="mode-btn"
+              aria-selected={mode === 'video'}
+              onClick={() => setMode('video')}
+            >
+              Video
             </button>
           </div>
         )}
@@ -852,7 +1033,7 @@ export default function App() {
 
         <div className="topbar-spacer" />
 
-        {selected && (
+        {selected && mode !== 'video' && (
           <div className="undo-pair">
             <button
               className="btn btn-sm"
@@ -902,6 +1083,39 @@ export default function App() {
       {photos.length === 0 || !selected ? (
         <div className="workspace">
           <Hero onFiles={addFiles} />
+        </div>
+      ) : mode === 'video' ? (
+        <div className="workspace video-mode">
+          <ReelTray photos={reelPhotos} off={reelOff} onToggle={toggleInReel} onFiles={addFiles} />
+          <ReelStage
+            photos={reelIncluded}
+            settings={reel}
+            resultUrl={reelResult?.url ?? null}
+            onError={reportError}
+          />
+          <ReelPanel
+            order={reelPhotos}
+            off={reelOff}
+            settings={reel}
+            onSettings={(patch) => setReel((r) => ({ ...r, ...patch }))}
+            onMove={moveInReel}
+            onToggle={toggleInReel}
+            collapsed={!sheetOpen}
+            onExpand={() => setSheetOpen((v) => !v)}
+            footer={
+              <ReelExport
+                count={reelIncluded.length}
+                settings={reel}
+                supported={reelSupported}
+                busy={reelProgress !== null}
+                result={reelResult ? { name: reelResult.name, size: reelResult.blob.size } : null}
+                canShare={canShareFiles}
+                onMake={makeReel}
+                onSave={() => reelResult && saveBlob(reelResult.blob, reelResult.name)}
+                onShare={shareReel}
+              />
+            }
+          />
         </div>
       ) : mode === 'collage' && collage ? (
         <div className="workspace collage-mode">
@@ -1022,6 +1236,21 @@ export default function App() {
       )}
 
       <Toasts toasts={toasts} onDismiss={dismiss} />
+
+      {reelProgress !== null && (
+        <div className="busy" role="alertdialog" aria-label="Making the video">
+          <div className="busy-card">
+            <div className="busy-ring" />
+            <span>Making the video… {Math.round(reelProgress * 100)}%</span>
+            <div className="progress" aria-hidden="true">
+              <i style={{ width: `${Math.round(reelProgress * 100)}%` }} />
+            </div>
+            <button className="btn btn-sm" onClick={() => reelAbort.current?.abort()}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {busy && (
         <div className="busy">
