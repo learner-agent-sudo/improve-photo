@@ -1,0 +1,50 @@
+# Visits the live site every hour and reports the result to Healthchecks.io,
+# which emails you when the site breaks, and again when it recovers. If these
+# hourly reports stop arriving at all, Healthchecks.io emails you about that
+# too, so a monitor that has quietly stopped cannot pass for a healthy site.
+#
+# What "the site works" means is explained at the top of the script,
+# scripts/healthcheck.sh.
+#
+# One-time setup, both in the browser (the README, "Monitoring", has the steps):
+#   1. healthchecks.io -> Add Check -> Period 1 hour, Grace Time 2 hours.
+#   2. Copy the check's ping URL into this repository as an Actions secret
+#      named HC_PING_URL: Settings -> Secrets and variables -> Actions.
+# Until the secret exists the check still runs; it just has nobody to tell.
+#
+# GitHub runs scheduled workflows only from the default branch, and turns them
+# off in a public repository after 60 days without a push. When that happens
+# the reports stop, Healthchecks.io emails you, and the fix is
+# Actions -> Site health check -> Enable workflow.
+name: Site health check
+
+on:
+  schedule:
+    # Minute 17 rather than 0: GitHub says scheduled runs are delayed, and
+    # sometimes dropped, at the start of every hour when load is highest.
+    - cron: '17 * * * *'
+  # The "Run workflow" button, for checking on demand.
+  workflow_dispatch:
+  # Re-run whenever the check itself changes, so an edit is proven at once.
+  push:
+    paths:
+      - .github/workflows/healthcheck.yml
+      - scripts/healthcheck.sh
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Pinned rather than ubuntu-latest: the start-up check uses the Google
+    # Chrome that GitHub preinstalls on this image.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+      - name: Check the site and report to Healthchecks.io
+        env:
+          HC_PING_URL: ${{ secrets.HC_PING_URL }}
+        run: bash scripts/healthcheck.sh

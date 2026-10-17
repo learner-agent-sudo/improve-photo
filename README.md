@@ -80,6 +80,74 @@ command is `npm run build` and the output directory is `dist`. `vite.config.ts`
 uses `base: './'` so the same build works on a root domain and on a GitHub Pages
 subpath without changes.
 
+## Monitoring (optional)
+
+[`.github/workflows/healthcheck.yml`](.github/workflows/healthcheck.yml) visits
+the live site every hour and reports to [Healthchecks.io](https://healthchecks.io),
+which emails you when the site breaks and again when it recovers. Both are free:
+GitHub Actions minutes cost nothing on a public repository, and Healthchecks.io's
+free plan covers 20 checks. This uses one.
+
+Healthchecks.io does not visit websites itself. Its own documentation says so:
+it *"listens for HTTP requests ("pings")"* and is *"not the right tool for
+monitoring website uptime by probing it with HTTP requests"*. So the GitHub job
+does the visiting, and Healthchecks.io does the alerting. That split has a
+useful side effect: if the GitHub job ever stops running, the pings stop, and
+Healthchecks.io emails you about that too. A monitor that has quietly died
+cannot pass for a healthy site.
+
+Each visit checks more than "the address answers", because every realistic way
+this site breaks still answers on the front page:
+
+| Check | Catches |
+| --- | --- |
+| The page is the built app, not the source `index.html` | Pages switched back to "Deploy from a branch" (see above) |
+| Every script and stylesheet it names downloads | A deploy whose page names files that are not there |
+| A headless Chrome opens it and the app starts | A script that loads but crashes before anything appears |
+
+A failure is checked again a minute later before anyone is told, so a passing
+blip does not wake you.
+
+### Setting it up
+
+About five minutes, all in the browser.
+
+1. **Sign up** at [healthchecks.io](https://healthchecks.io). A new account
+   already has one check, called *My First Check*, set to email the address you
+   signed up with.
+2. **Set the check up for this site.** Open it, rename it (e.g. *Darkroom
+   site*), then under **Schedule** choose **Simple** and set **Period** to
+   **1 hour** and **Grace Time** to **2 hours**.
+   *Why 2 hours:* GitHub's scheduler runs late, and occasionally skips a run,
+   when it is busy. The grace time only decides how long a *missing* report
+   is tolerated. A broken site is reported at once by the next hourly visit,
+   whatever the grace time.
+3. **Copy the check's ping URL.** It looks like
+   `https://hc-ping.com/` followed by a long code.
+4. **Give it to GitHub as a secret.** In this repository go to **Settings →
+   Secrets and variables → Actions → New repository secret**. Name it
+   `HC_PING_URL` and paste the URL as its value. Use a secret, not a variable:
+   the repository is public, and anyone with the URL could send fake "all is
+   well" reports.
+5. **Test it.** Go to **Actions → Site health check → Run workflow**. Within a
+   minute the check on Healthchecks.io should turn green, and its log shows
+   what was checked.
+
+### Things worth knowing
+
+- **GitHub turns scheduled jobs off after 60 days with no pushes** to a public
+  repository. When that happens the reports stop and Healthchecks.io emails
+  you. Fix it under **Actions → Site health check → Enable workflow**.
+- **You get one email when the site goes down and one when it comes back**,
+  not one every hour. That is why the GitHub run stays green when it has
+  successfully reported a failure. A red run means the report itself could not
+  be delivered (Healthchecks.io unreachable, or the secret is wrong).
+- **Until the secret exists**, the hourly check still runs, and a broken site
+  shows as a red run on the Actions tab, so GitHub's own failure email is the
+  only alarm.
+- **It does not cover the AI review.** The Gemini proxy is optional and
+  deployed separately, and this check only visits the site.
+
 ---
 
 ## What it does to a photo
@@ -505,6 +573,8 @@ src/
   components/      the interface
 proxy/
   cloudflare-worker.js   keeps the API key off the page, and works around CORS
+scripts/
+  healthcheck.sh   visits the live site and reports to Healthchecks.io (hourly, via Actions)
 ```
 
 `src/engine` is deliberately free of any UI. Stage 2 renders every collage tile

@@ -493,6 +493,47 @@ the controls beneath it until `.stage-canvas-wrap` was given `overflow: hidden`.
 - **Free-floating photos.** Every photo lives in a frame. It keeps the result
   tidy and the interaction unambiguous, which is what the meal-grid case wants.
 
+## Monitoring
+
+Healthchecks.io was the requirement, and it is a dead man's switch rather than
+an uptime prober: it waits for pings and alerts when one reports failure or
+when they stop. Its own documentation lists *"monitoring website uptime by
+probing it with HTTP requests"* as something it is not for. So something else
+has to visit the site and send the pings. A scheduled GitHub Actions workflow
+does that, because it costs nothing on a public repository and needs no new
+account or server.
+
+**What gets checked** (`scripts/healthcheck.sh`) is chosen by how this site
+actually fails, which is never "the server is down". GitHub Pages essentially
+always answers. The failures that have happened, or that the code already
+guards against, all answer 200 on the front page: the unbuilt source page
+served by "Deploy from a branch", hashed assets missing after a deploy, and a
+bundle that loads and throws. So the script checks the page is the build,
+fetches every asset it names, and opens it in the headless Chrome that GitHub
+preinstalls on its Ubuntu image to confirm that `main.tsx` ran. The fallback
+notice in `index.html` is removed as its first act, so its absence is a precise
+signal that costs nothing to add.
+
+**The GitHub run stays green when it has reported a failure.** GitHub emails
+on every failed run, which during a day-long outage is 24 emails, where
+Healthchecks.io sends one for down and one for up. So Healthchecks.io owns the
+alerting, and a red run means only that the report itself could not be
+delivered. Before the secret is configured there is nobody to report to, so
+then a broken site does turn the run red.
+
+**Timing.** The schedule is minute 17 of each hour, because GitHub documents
+that scheduled runs are delayed, and can be dropped, at the start of the hour.
+On the Healthchecks.io side the recommended grace time (2 hours on a 1-hour
+period) is deliberately loose. It only governs how long a *missing* ping is
+tolerated, which is the case of GitHub's scheduler running late. A broken site
+sends an explicit `/fail` at the next visit regardless of the grace time. Each
+failure is re-checked once after 60 seconds before it is reported, so a CDN
+blip or a deploy landing mid-check does not page anyone.
+
+**The ping URL is a secret** even though the check only ever reports *about* a
+public site: whoever holds it can send "all is well" pings, which would hide a
+real outage.
+
 ## Sources
 
 Export dimensions:
@@ -532,6 +573,27 @@ AI:
   ("Never expose keys client-side in production... run a backend proxy server")
 - [Cloudflare Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
 - [Google AI Studio — get an API key](https://aistudio.google.com/apikey)
+
+Monitoring:
+
+- Healthchecks.io's own documentation, read from its source repository:
+  [introduction](https://github.com/healthchecks/healthchecks/blob/master/templates/docs/introduction.md)
+  (what it is and is not for),
+  [Pinging API](https://github.com/healthchecks/healthchecks/blob/master/templates/docs/http_api.md)
+  (`/fail`, request bodies, rate limits),
+  [Shell scripts](https://github.com/healthchecks/healthchecks/blob/master/templates/docs/bash.md)
+  (the `curl -fsS -m 10 --retry 5` pattern),
+  [Configuring checks](https://github.com/healthchecks/healthchecks/blob/master/templates/docs/configuring_checks.md)
+  (period and grace time)
+- [Healthchecks.io pricing](https://healthchecks.io/pricing/): the free
+  Hobbyist plan covers 20 checks
+- [GitHub Docs — Events that trigger workflows, `schedule`](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
+  (default branch only, delays and drops at the start of the hour, disabled
+  after 60 days without activity in a public repository)
+- [GitHub Docs — GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+  (free for public repositories on standard runners)
+- [GitHub runner images — Ubuntu 24.04](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+  (Google Chrome preinstalled)
 
 Image processing:
 
