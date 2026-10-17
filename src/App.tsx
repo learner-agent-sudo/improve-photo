@@ -586,6 +586,9 @@ export default function App() {
   // --- keyboard -------------------------------------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A focused control that used the key - a perspective corner or an area
+      // handle nudged with the arrows - has already had its turn.
+      if (e.defaultPrevented) return
       const el = e.target as HTMLElement | null
       const typing = el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.isContentEditable)
 
@@ -593,7 +596,9 @@ export default function App() {
         e.preventDefault()
         const dir = e.shiftKey ? 'redo' : 'undo'
         if (mode === 'collage') stepCollage(dir)
-        else step(dir)
+        // Video has no history of its own, and undoing a photo edit that is
+        // not on screen would change the video with no visible cause.
+        else if (mode === 'enhance') step(dir)
         return
       }
       if (typing || e.metaKey || e.ctrlKey) return
