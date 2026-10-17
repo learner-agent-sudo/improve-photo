@@ -165,29 +165,26 @@ try {
   check(dominant(frames.t22) === 'green', 'frame at 2.2 s shows the second photo')
   check(dominant(frames.t42) === 'blue', 'frame at 4.2 s shows the third photo')
 
-  // And Chrome itself can play the file back.
-  const played = await page.evaluate(async () => {
-    const v = document.createElement('video')
-    v.muted = true
-    v.src = document.querySelector('.reel-video').src
-    await new Promise((res, rej) => {
-      v.onloadeddata = res
-      v.onerror = () => rej(new Error('Chrome could not play the file'))
-    })
-    v.currentTime = 2.2
-    await new Promise((res) => (v.onseeked = res))
-    // Wait for the frame to be presented, not merely decoded, before reading it.
-    if ('requestVideoFrameCallback' in v) await new Promise((res) => v.requestVideoFrameCallback(() => res()))
-    const c = document.createElement('canvas')
-    c.width = v.videoWidth
-    c.height = v.videoHeight
-    const g = c.getContext('2d')
-    g.drawImage(v, 0, 0)
-    const d = g.getImageData(c.width / 2, c.height / 2, 1, 1).data
-    return { size: [v.videoWidth, v.videoHeight], duration: v.duration, colour: [d[0], d[1], d[2]] }
-  })
-  console.log('played in Chrome:', JSON.stringify(played))
-  check(played.size[0] === 1080 && played.size[1] === 1350, 'Chrome plays it back at 1080 x 1350')
+  // And Chrome itself can open and play the file. The pictures were checked
+  // above; this only asks whether its own player accepts it. (An earlier
+  // version waited for requestVideoFrameCallback on a paused video, which
+  // headless Chrome never fires, and hung the job until GitHub cancelled it.)
+  const played = await Promise.race([
+    page.evaluate(async () => {
+      const v = document.createElement('video')
+      v.muted = true
+      v.src = document.querySelector('.reel-video').src
+      await new Promise((res, rej) => {
+        v.onloadeddata = res
+        v.onerror = () => rej(new Error('Chrome could not play the file'))
+      })
+      return { size: [v.videoWidth, v.videoHeight], duration: v.duration }
+    }),
+    sleep(30000).then(() => ({ size: [0, 0], duration: 0, timedOut: true })),
+  ])
+  console.log('opened in Chrome:', JSON.stringify(played))
+  check(played.size[0] === 1080 && played.size[1] === 1350, 'Chrome opens it at 1080 x 1350')
+  check(Math.abs(played.duration - 4.5) < 0.05, 'Chrome reports 4.5 s')
   check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`)
 } catch (err) {
   failures.push(err.message)
@@ -202,3 +199,5 @@ if (failures.length) {
   process.exit(1)
 }
 console.log('\nall checks passed')
+// Explicitly: the preview server's child processes must not keep the job alive.
+process.exit(0)

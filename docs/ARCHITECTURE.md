@@ -581,10 +581,15 @@ fps, fast start, each photo prepared and released exactly once, the right
 photo at each moment, a half-and-half mix mid-crossfade, the slow zoom
 growing a test disc by 10% (5% for whole-photo), and cancel stopping cleanly.
 The real H.264 path is tested by a workflow in the Google Chrome on GitHub's
-Ubuntu image, which decodes its frames with ffmpeg too. That workflow's first
-version had a hole worth recording: an all-black sample counted as "red"
-because the strongest channel of (0, 0, 0) is the first one listed. A colour
-now only counts when one channel clearly leads.
+Ubuntu image, which decodes its frames with ffmpeg too. Its first versions
+had two holes worth recording. An all-black sample counted as "red", because
+the strongest channel of (0, 0, 0) is the first one listed; a colour now only
+counts when one channel clearly leads, and frames are decoded by ffmpeg rather
+than read back from Chrome's player. And a playback check that waited for
+`requestVideoFrameCallback` on a paused video - which headless Chrome never
+fires - hung the job until GitHub cancelled it. On that GPU-less runner the
+encode itself takes about two and a half minutes in software, with steady
+progress, so the test allows eight.
 
 ## Monitoring
 
