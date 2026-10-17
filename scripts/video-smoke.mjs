@@ -6,18 +6,21 @@
 // Chrome installed, which does. This script drives the built site in it, makes
 // a short video from three generated photos, and checks the file two ways:
 //   - the container, read back with Mediabunny: codec, size, frame count;
-//   - the pictures, by playing the file in Chrome and sampling frames at known
-//     times, so a video that is the right shape but shows the wrong photos, or
-//     nothing at all, still fails.
+//   - the pictures, decoded by ffmpeg at known times, so a video that is the
+//     right shape but shows the wrong photos, or nothing at all, still fails;
+//   - that Chrome can play its own file back.
 //
 // Run by .github/workflows/video-smoke.yml after `npm run build`. Needs the
-// `playwright` package (installed there with --no-save) and Google Chrome.
-import { spawn } from 'node:child_process'
+// `playwright` package (installed there with --no-save), Google Chrome and
+// ffmpeg. The video is written to video-smoke.mp4 for the workflow to attach.
+import { execFileSync, spawn } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { chromium } from 'playwright'
 import { ALL_FORMATS, BufferSource, Input } from 'mediabunny'
 
 const PORT = 4173
+const OUT_FILE = process.env.SMOKE_OUT || 'video-smoke.mp4'
 const URL = `http://127.0.0.1:${PORT}/`
 const failures = []
 const check = (ok, what) => {
@@ -122,8 +125,37 @@ try {
   check(Math.abs(duration - 4.5) < 0.05, 'lasts 4.5 s')
   check(bytes.indexOf(Buffer.from('moov')) < bytes.indexOf(Buffer.from('mdat')), 'index before media (fast start)')
 
-  // The pictures, by playing the file in Chrome.
-  const samples = await page.evaluate(async () => {
+  // Kept for the workflow to attach, so the actual output can be watched.
+  writeFileSync(OUT_FILE, bytes)
+
+  // The pictures, decoded by ffmpeg rather than by the browser that made them,
+  // so the check does not depend on Chrome's own player. Each sample is the
+  // average of the middle of the frame.
+  const colourAt = (t) => {
+    const raw = execFileSync('ffmpeg', [
+      '-v', 'error', '-ss', String(t), '-i', OUT_FILE, '-frames:v', '1',
+      '-vf', 'crop=iw*0.3:ih*0.3:iw*0.35:ih*0.35,scale=1:1:flags=area',
+      '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-',
+    ])
+    return [raw[0], raw[1], raw[2]]
+  }
+  // A colour only counts if one channel clearly leads: a black frame must not
+  // pass as "red" just because red is listed first.
+  const dominant = (p) => {
+    const max = Math.max(...p)
+    const rest = p.filter((_, i) => i !== p.indexOf(max))
+    return max > 90 && rest.every((c) => max - c > 50) ? ['red', 'green', 'blue'][p.indexOf(max)] : `none (${p})`
+  }
+  const frames = { t03: colourAt(0.3), t125: colourAt(1.25), t22: colourAt(2.2), t42: colourAt(4.2) }
+  console.log('frames (ffmpeg):', JSON.stringify(frames))
+  check(dominant(frames.t03) === 'red', 'frame at 0.3 s shows the first photo')
+  // Halfway through the crossfade, both photos are in it.
+  check(frames.t125[0] > 60 && frames.t125[1] > 60, 'frame at 1.25 s is a mix of the first two')
+  check(dominant(frames.t22) === 'green', 'frame at 2.2 s shows the second photo')
+  check(dominant(frames.t42) === 'blue', 'frame at 4.2 s shows the third photo')
+
+  // And Chrome itself can play the file back.
+  const played = await page.evaluate(async () => {
     const v = document.createElement('video')
     v.muted = true
     v.src = document.querySelector('.reel-video').src
@@ -131,24 +163,20 @@ try {
       v.onloadeddata = res
       v.onerror = () => rej(new Error('Chrome could not play the file'))
     })
+    v.currentTime = 2.2
+    await new Promise((res) => (v.onseeked = res))
+    // Wait for the frame to be presented, not merely decoded, before reading it.
+    if ('requestVideoFrameCallback' in v) await new Promise((res) => v.requestVideoFrameCallback(() => res()))
     const c = document.createElement('canvas')
     c.width = v.videoWidth
     c.height = v.videoHeight
     const g = c.getContext('2d')
-    const at = async (t) => {
-      v.currentTime = t
-      await new Promise((res) => (v.onseeked = res))
-      g.drawImage(v, 0, 0)
-      const d = g.getImageData(c.width / 2, c.height / 2, 1, 1).data
-      return [d[0], d[1], d[2]]
-    }
-    return { t03: await at(0.3), t22: await at(2.2), t42: await at(4.2) }
+    g.drawImage(v, 0, 0)
+    const d = g.getImageData(c.width / 2, c.height / 2, 1, 1).data
+    return { size: [v.videoWidth, v.videoHeight], duration: v.duration, colour: [d[0], d[1], d[2]] }
   })
-  const dominant = (p) => ['red', 'green', 'blue'][p.indexOf(Math.max(...p))]
-  console.log('frames:', JSON.stringify(samples))
-  check(dominant(samples.t03) === 'red', 'frame at 0.3 s shows the first photo')
-  check(dominant(samples.t22) === 'green', 'frame at 2.2 s shows the second photo')
-  check(dominant(samples.t42) === 'blue', 'frame at 4.2 s shows the third photo')
+  console.log('played in Chrome:', JSON.stringify(played))
+  check(played.size[0] === 1080 && played.size[1] === 1350, 'Chrome plays it back at 1080 x 1350')
   check(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join('; ') : ''}`)
 } catch (err) {
   failures.push(err.message)

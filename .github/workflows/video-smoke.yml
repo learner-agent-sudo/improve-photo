@@ -41,4 +41,14 @@ jobs:
       - run: npm install --no-save playwright@1.56.1
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      # To decode the result independently of the browser that made it.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg
       - run: node scripts/video-smoke.mjs
+      # The video itself, to watch: Actions -> this run -> Artifacts.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sample-video
+          path: video-smoke.mp4
+          if-no-files-found: ignore
+          retention-days: 14

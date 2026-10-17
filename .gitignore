@@ -4,3 +4,4 @@ dist/
 *.local
 .vite/
 *.tsbuildinfo
+video-smoke.mp4
