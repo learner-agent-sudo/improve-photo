@@ -174,17 +174,88 @@ export interface Levels {
 
 export const NEUTRAL_LEVELS: Levels = { black: 0, white: 1 }
 
+/**
+ * The colour mix: hue, saturation and brightness for one colour at a time.
+ *
+ * Eight bands, as in Lightroom and Snapseed. The centres are uneven on purpose:
+ * the warm end of the wheel is where skin, bread, sauces and wood all live, so
+ * it gets three bands (red, orange, yellow) inside 60 degrees, while one band
+ * is plenty for the stretch from green to aqua.
+ */
+export const MIX_BANDS = ['red', 'orange', 'yellow', 'green', 'aqua', 'blue', 'purple', 'magenta'] as const
+export type MixBand = (typeof MIX_BANDS)[number]
+/** Band centres in degrees, matching MIX_BANDS. The shader keeps its own copy. */
+export const MIX_HUES = [0, 30, 60, 120, 180, 240, 270, 300]
+
+export interface BandShift {
+  /** -1..1, about +/-30 degrees toward the neighbouring colours. */
+  hue: number
+  /** -1 removes this colour's saturation, +1 doubles it. */
+  sat: number
+  /** -1..1, about +/-1 stop for this colour only. */
+  lum: number
+}
+
+/** One entry per band, in MIX_BANDS order. */
+export type ColourMix = BandShift[]
+
+export const NEUTRAL_MIX: ColourMix = MIX_BANDS.map(() => ({ hue: 0, sat: 0, lum: 0 }))
+
+export function isNeutralMix(mix: ColourMix | undefined): boolean {
+  return !mix || mix.every((b) => b.hue === 0 && b.sat === 0 && b.lum === 0)
+}
+
+/**
+ * A local adjustment: brighten, darken, warm or cool one part of the photo.
+ *
+ * Positions are 0..1 across the photo after perspective correction, but
+ * before it is turned, mirrored, straightened or cropped. That is what makes an
+ * area stay on the dish when the crop moves or the photo is rotated, instead of
+ * staying put on the screen while the food slides out from under it. Sizes are
+ * fractions of the photo's long edge, so a circle stays round on a portrait.
+ */
+export interface AreaAdjust {
+  id: string
+  /** A soft-edged ellipse, or a graduated filter across the frame. */
+  kind: 'radial' | 'linear'
+  /** Radial: the centre. Linear: the end where the effect is full strength. */
+  x: number
+  y: number
+  /** Radial only: half-width and half-height, as fractions of the long edge. */
+  rx: number
+  ry: number
+  /** Linear only: the end where the effect has faded to nothing. */
+  x2: number
+  y2: number
+  /** Radial only: how much of the radius is a soft fall-off, 0.05..1. */
+  feather: number
+  /** Radial: affect the outside instead. Linear: run the fade the other way. */
+  invert: boolean
+  /** Brightness in stops, -1.5..1.5. Applied in linear light, like exposure. */
+  exposure: number
+  /** -1 (cooler) .. 1 (warmer), without changing brightness. */
+  warmth: number
+}
+
+/** More than this and the panel turns into a list nobody can read on a phone. */
+export const MAX_AREAS = 4
+
 /** Everything needed to reproduce one edited photo. */
 export interface Edit {
   adjustments: Adjustments
   geometry: Geometry
   levels: Levels
+  /** Optional so an edit made before these existed still renders. */
+  mix?: ColourMix
+  areas?: AreaAdjust[]
 }
 
 export const NEUTRAL_EDIT: Edit = {
   adjustments: NEUTRAL,
   geometry: NEUTRAL_GEOMETRY,
   levels: NEUTRAL_LEVELS,
+  mix: NEUTRAL_MIX,
+  areas: [],
 }
 
 export type ExportFormat = 'jpeg' | 'webp' | 'png'

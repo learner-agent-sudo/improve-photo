@@ -153,12 +153,74 @@ uniform float uVibrance, uSaturation;
 uniform float uClarity, uSharpen;
 uniform float uVignette, uGrain, uSeed;
 
+// Colour mix: per band, (hue, saturation, brightness), each -1..1.
+uniform vec3  uMix[8];
+uniform float uMixOn;
+
+// Areas. uFrameXf maps output UV to area UV (see outputToFrame); uFrameUnit
+// is the frame's size over its long edge, so distances come out round.
+uniform mat3  uFrameXf;
+uniform vec2  uFrameUnit;
+uniform int   uAreaCount;
+uniform vec4  uAreaA[4];     // x, y, kind (0 radial, 1 linear), invert
+uniform vec4  uAreaB[4];     // radial: rx, ry, feather; linear: x2, y2
+uniform vec3  uAreaGain[4];  // log2 of the linear-light RGB multiplier
+
 ${COLOR_HELPERS}
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
   return fract((p3.x + p3.y) * p3.z);
+}
+
+vec3 rgbToHsv(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
+}
+
+vec3 hsvToRgb(vec3 c) {
+  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+
+// Band centres in degrees (MIX_HUES in types.ts), with red repeated at 360 so
+// every hue falls between two of them.
+const float MIX_H[9] = float[9](0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0, 360.0);
+
+// The mix setting at a hue: the two neighbouring bands blended by how far the
+// hue sits between their centres. Blending, rather than snapping to the
+// nearest band, is what stops a gradient across orange from breaking into a
+// visible edge where it crosses from "red" into "orange".
+vec3 mixAt(float deg) {
+  for (int i = 0; i < 8; i++) {
+    if (deg < MIX_H[i + 1]) {
+      float t = (deg - MIX_H[i]) / (MIX_H[i + 1] - MIX_H[i]);
+      return mix(uMix[i], uMix[(i + 1) % 8], t * t * (3.0 - 2.0 * t));
+    }
+  }
+  return uMix[0];
+}
+
+// How strongly area i applies at this point, 0..1.
+float areaWeight(int i, vec2 f) {
+  vec4 a = uAreaA[i];
+  vec4 b = uAreaB[i];
+  vec2 p = f * uFrameUnit;
+  float w;
+  if (a.z < 0.5) {
+    vec2 d = (p - a.xy * uFrameUnit) / max(b.xy, vec2(1e-4));
+    w = 1.0 - smoothstep(1.0 - b.z, 1.0 + 1e-4, length(d));
+  } else {
+    vec2 s = a.xy * uFrameUnit;
+    vec2 se = b.xy * uFrameUnit - s;
+    float t = dot(p - s, se) / max(dot(se, se), 1e-8);
+    w = 1.0 - smoothstep(0.0, 1.0, t);
+  }
+  return a.w > 0.5 ? 1.0 - w : w;
 }
 
 void main() {
@@ -204,6 +266,20 @@ void main() {
 
   // --- linear light: exposure and white balance ---------------------------
   vec3 lin = srgbToLin(c) * exp2(uExposure) * uWbGain;
+
+  // --- areas: local exposure and warmth, in the same linear light ---------
+  // Summed in log space, so two overlapping areas compose the way two
+  // exposure changes would, in whatever order they were added.
+  if (uAreaCount > 0) {
+    vec3 fp = uFrameXf * vec3(outUv, 1.0);
+    vec2 f = fp.xy / fp.z;
+    vec3 logGain = vec3(0.0);
+    for (int i = 0; i < 4; i++) {
+      if (i >= uAreaCount) break;
+      logGain += areaWeight(i, f) * uAreaGain[i];
+    }
+    lin *= exp2(logGain);
+  }
   c = linToSrgb(lin);
 
   // --- levels -------------------------------------------------------------
@@ -247,6 +323,28 @@ void main() {
   float sat = max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b);
   float vib = uVibrance * (1.0 - smoothstep(0.0, 0.72, sat));
   c = clamp(mix(vec3(lum), c, clamp(1.0 + uSaturation + vib, 0.0, 3.0)), 0.0, 1.0);
+
+  // --- colour mix: one colour at a time -----------------------------------
+  if (uMixOn > 0.5) {
+    vec3 hsv = rgbToHsv(c);
+    // Near-greys have no reliable hue - a white plate's is just noise - so
+    // they are faded out of the mix rather than tinted by whichever band
+    // their noise happens to land in.
+    float chroma = max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b);
+    vec3 m = mixAt(hsv.x * 360.0) * smoothstep(0.03, 0.22, chroma);
+
+    // Hue: turn toward the neighbouring colours, then put the brightness
+    // back, so moving yellow toward orange does not also darken it.
+    float l0 = luma(c);
+    vec3 turned = hsvToRgb(vec3(fract(hsv.x + m.x * (30.0 / 360.0)), hsv.y, hsv.z));
+    c = clamp(turned + (l0 - luma(turned)), 0.0, 1.0);
+
+    float l1 = luma(c);
+    c = clamp(mix(vec3(l1), c, 1.0 + m.y), 0.0, 1.0);
+
+    // Brightness as a per-colour exposure, in linear light.
+    c = clamp(linToSrgb(srgbToLin(c) * exp2(m.z)), 0.0, 1.0);
+  }
 
   // --- vignette -----------------------------------------------------------
   if (abs(uVignette) > 0.001) {

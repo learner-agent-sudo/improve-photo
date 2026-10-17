@@ -12,7 +12,7 @@
 import { analyseBitmap } from '../engine/analysis'
 import { autoEnhance, type AutoResult } from '../engine/auto'
 import { decodeImageFile, fitBitmap, make2dCanvas } from '../engine/decode'
-import { NEUTRAL_GEOMETRY, type Analysis, type Edit } from '../engine/types'
+import { NEUTRAL_GEOMETRY, NEUTRAL_MIX, type Analysis, type Edit } from '../engine/types'
 
 /** Long edge of the interactive preview. Big enough to judge sharpening. */
 export const PREVIEW_EDGE = 2200
@@ -89,6 +89,8 @@ export async function createPhoto(file: File): Promise<Photo> {
         adjustments: auto.adjustments,
         levels: auto.levels,
         geometry: { ...NEUTRAL_GEOMETRY },
+        mix: NEUTRAL_MIX,
+        areas: [],
       },
       presetId: 'auto',
       seed: Math.floor(Math.random() * 997) + 3,

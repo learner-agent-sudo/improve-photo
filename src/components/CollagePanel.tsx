@@ -164,8 +164,10 @@ export function CollagePanel({
             role="tab"
             aria-selected={current === t}
             onClick={() => {
+              // Closed: open on this tab. Open: switch tabs, and only a second
+              // tap on the tab already showing puts the sheet away.
+              if (collapsed || current === t) onExpand?.()
               setTab(t)
-              onExpand?.()
             }}
             style={{ textTransform: 'capitalize' }}
           >

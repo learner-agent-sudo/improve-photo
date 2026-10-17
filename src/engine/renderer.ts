@@ -5,9 +5,10 @@
  * at full resolution and disposes it. Both run identical code, so what you see
  * is what you download.
  */
-import { buildTransform, outputSize, resolveCrop, type ViewMode } from './geometry'
+import { buildTransform, outputSize, outputToFrame, resolveCrop, type ViewMode } from './geometry'
+import { toGL } from './matrix'
 import { FRAG_BLUR, FRAG_COMPOSITE, FRAG_DENOISE, VERT } from './shaders'
-import type { Edit } from './types'
+import { isNeutralMix, MAX_AREAS, type AreaAdjust, type ColourMix, type Edit } from './types'
 
 export class WebGLUnavailableError extends Error {
   constructor() {
@@ -68,6 +69,43 @@ export function solveTemperatureTint(
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+
+/** The colour mix flattened for `uniform vec3 uMix[8]`. */
+export function packMix(mix: ColourMix): Float32Array {
+  const out = new Float32Array(24)
+  mix.slice(0, 8).forEach((b, i) => {
+    out[i * 3] = clamp(b.hue, -1, 1)
+    out[i * 3 + 1] = clamp(b.sat, -1, 1)
+    out[i * 3 + 2] = clamp(b.lum, -1, 1)
+  })
+  return out
+}
+
+/**
+ * Areas flattened for the three uniform arrays the shader reads. The gain is
+ * worked out here, once per frame, rather than per pixel: brightness and
+ * warmth become one log2 RGB multiplier, with warmth borrowing the white
+ * balance maths so it shifts colour without shifting brightness.
+ */
+export function packAreas(areas: AreaAdjust[]) {
+  const a = new Float32Array(MAX_AREAS * 4)
+  const b = new Float32Array(MAX_AREAS * 4)
+  const gain = new Float32Array(MAX_AREAS * 3)
+  const list = areas.slice(0, MAX_AREAS)
+  list.forEach((ar, i) => {
+    a.set([ar.x, ar.y, ar.kind === 'linear' ? 1 : 0, ar.invert ? 1 : 0], i * 4)
+    b.set(
+      ar.kind === 'linear'
+        ? [ar.x2, ar.y2, 0, 0]
+        : [Math.max(ar.rx, 0.005), Math.max(ar.ry, 0.005), clamp(ar.feather, 0.05, 1), 0],
+      i * 4,
+    )
+    const wb = whiteBalanceGain(clamp(ar.warmth, -1, 1), 0)
+    const ev = clamp(ar.exposure, -1.5, 1.5)
+    gain.set([ev + Math.log2(wb[0]), ev + Math.log2(wb[1]), ev + Math.log2(wb[2])], i * 3)
+  })
+  return { count: list.length, a, b, gain }
+}
 
 interface Program {
   program: WebGLProgram
@@ -330,6 +368,25 @@ export class Renderer {
     gl.uniform1f(p.uniforms.uVignette!, adj.vignette)
     gl.uniform1f(p.uniforms.uGrain!, adj.grain)
     gl.uniform1f(p.uniforms.uSeed!, opts.seed ?? 17)
+
+    const mix = edit.mix
+    const mixOn = !!mix && !isNeutralMix(mix)
+    gl.uniform1f(p.uniforms.uMixOn!, mixOn ? 1 : 0)
+    if (mixOn) gl.uniform3fv(p.uniforms['uMix[0]']!, packMix(mix))
+
+    // Areas are positioned on the rectified photo, which the perspective view
+    // does not draw, so they sit that one out.
+    const frame = outputToFrame(this.srcW, this.srcH, edit.geometry, opts.view ?? 'edit')
+    const areas = frame ? packAreas(edit.areas ?? []) : null
+    gl.uniform1i(p.uniforms.uAreaCount!, areas?.count ?? 0)
+    if (frame && areas && areas.count > 0) {
+      const long = Math.max(frame.rw, frame.rh)
+      gl.uniformMatrix3fv(p.uniforms.uFrameXf!, false, toGL(frame.m))
+      gl.uniform2f(p.uniforms.uFrameUnit!, frame.rw / long, frame.rh / long)
+      gl.uniform4fv(p.uniforms['uAreaA[0]']!, areas.a)
+      gl.uniform4fv(p.uniforms['uAreaB[0]']!, areas.b)
+      gl.uniform3fv(p.uniforms['uAreaGain[0]']!, areas.gain)
+    }
 
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     gl.bindVertexArray(null)

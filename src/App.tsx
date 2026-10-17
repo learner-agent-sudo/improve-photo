@@ -25,18 +25,24 @@ import {
 } from './engine/collage'
 import { exportCollage, type CollageSource } from './engine/collageRender'
 import { Exporter, saveBlob } from './engine/export'
-import { aspectRatio, centredCrop, framedSize } from './engine/geometry'
+import { aspectRatio, centredCrop, framedSize, outputToFrame, resolveCrop } from './engine/geometry'
+import { apply } from './engine/matrix'
 import { applyPreset, PRESETS } from './engine/presets'
 import { TARGETS } from './engine/targets'
 import {
+  MAX_AREAS,
   NEUTRAL,
   NEUTRAL_GEOMETRY,
   NEUTRAL_LEVELS,
+  NEUTRAL_MIX,
   type Adjustments,
+  type AreaAdjust,
+  type BandShift,
   type Edit,
   type Geometry,
 } from './engine/types'
 import { createPhoto, decodeForExport, disposePhoto, type Photo } from './state/photos'
+import { loadLooks, makeLook, saveLooks, type Look } from './state/looks'
 
 let toastId = 0
 
@@ -55,6 +61,8 @@ export default function App() {
   const [photos, setPhotos] = useState<Photo[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [tool, setTool] = useState<Tool>('adjust')
+  const [selectedArea, setSelectedArea] = useState<string | null>(null)
+  const [looks, setLooks] = useState<Look[]>(() => loadLooks())
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings())
   const [aiDialog, setAiDialog] = useState(false)
 
@@ -187,6 +195,10 @@ export default function App() {
     setCollage(restored)
   }, [])
 
+  // Undo can take away the area that was selected; never point at a ghost.
+  const liveArea =
+    selected && (selected.edit.areas ?? []).some((a) => a.id === selectedArea) ? selectedArea : null
+
   const hist = selectedId ? history.current.get(selectedId) : undefined
   const canUndo = (hist?.past.length ?? 0) > 0
   const canRedo = (hist?.future.length ?? 0) > 0
@@ -257,14 +269,98 @@ export default function App() {
 
   // Manual slider moves clear the preset highlight, because the photo is no
   // longer what that preset produces.
+  const clearPreset = useCallback(
+    () =>
+      setPhotos((prev) =>
+        prev.map((p) => (p.id === selectedId && p.presetId !== 'custom' ? { ...p, presetId: 'custom' } : p)),
+      ),
+    [selectedId],
+  )
+
   const markCustom = useCallback(
     (patch: Partial<Adjustments>) => {
       onAdjust(patch)
-      setPhotos((prev) =>
-        prev.map((p) => (p.id === selectedId && p.presetId !== 'custom' ? { ...p, presetId: 'custom' } : p)),
-      )
+      clearPreset()
     },
-    [onAdjust, selectedId],
+    [onAdjust, clearPreset],
+  )
+
+  const onMix = useCallback(
+    (band: number, patch: Partial<BandShift>) => {
+      patchEdit(`mix:${band}:${Object.keys(patch).join()}`, (e) => ({
+        ...e,
+        mix: (e.mix ?? NEUTRAL_MIX).map((b, i) => (i === band ? { ...b, ...patch } : b)),
+      }))
+      clearPreset()
+    },
+    [patchEdit, clearPreset],
+  )
+
+  const onResetMix = useCallback(() => {
+    patchEdit('mix:reset', (e) => ({ ...e, mix: NEUTRAL_MIX }))
+    clearPreset()
+  }, [patchEdit, clearPreset])
+
+  // --- local adjustments ----------------------------------------------------
+  // Switching photos puts the selection down; each photo has its own areas.
+  useEffect(() => setSelectedArea(null), [selectedId])
+
+  /**
+   * A new area lands in the middle of what is on screen, sized to the crop
+   * rather than to the whole photo - on a tight crop, a circle a quarter of the
+   * photo wide would swallow the frame. It starts with a visible amount of
+   * effect, so you can see at once what you are moving around.
+   */
+  const onAddArea = useCallback(
+    (kind: AreaAdjust['kind']) => {
+      const p = photosRef.current.find((x) => x.id === selectedId)
+      if (!p || (p.edit.areas ?? []).length >= MAX_AREAS) return
+      const pw = p.preview.width
+      const ph = p.preview.height
+      const fr = outputToFrame(pw, ph, p.edit.geometry, 'edit')
+      if (!fr) return
+      const c = resolveCrop(pw, ph, p.edit.geometry)
+      const visible = Math.max(c.cw, c.ch) / Math.max(fr.rw, fr.rh)
+      const at = (u: number, v: number) => apply(fr.m, u, v)
+      const id = `a${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`
+      const mid = at(0.5, 0.5)
+      const top = at(0.5, 0)
+      const fade = at(0.5, 0.45)
+      const area: AreaAdjust =
+        kind === 'radial'
+          ? { id, kind, x: mid.x, y: mid.y, rx: 0.24 * visible, ry: 0.24 * visible,
+              x2: mid.x, y2: mid.y, feather: 0.6, invert: false, exposure: 0.4, warmth: 0 }
+          : { id, kind, x: top.x, y: top.y, rx: 0.24, ry: 0.24,
+              x2: fade.x, y2: fade.y, feather: 0.6, invert: false, exposure: -0.4, warmth: 0 }
+      patchEdit(`area:add:${id}`, (e) => ({ ...e, areas: [...(e.areas ?? []), area] }))
+      setSelectedArea(id)
+      setTool('areas')
+      // On a phone the open sheet covers the middle of the photo, which is
+      // exactly where the new area lands. Put the sheet away so it can be
+      // placed; the Areas tab brings the sliders back. (Inert on a desktop.)
+      setSheetOpen(false)
+    },
+    [patchEdit, selectedId],
+  )
+
+  const onArea = useCallback(
+    (id: string, patch: Partial<AreaAdjust>, key: string) =>
+      patchEdit(`area:${id}:${key}`, (e) => ({
+        ...e,
+        areas: (e.areas ?? []).map((a) => (a.id === id ? { ...a, ...patch } : a)),
+      })),
+    [patchEdit],
+  )
+
+  const onRemoveArea = useCallback(
+    (id: string) => {
+      patchEdit(`area:del:${id}`, (e) => ({
+        ...e,
+        areas: (e.areas ?? []).filter((a) => a.id !== id),
+      }))
+      setSelectedArea((cur) => (cur === id ? null : cur))
+    },
+    [patchEdit],
   )
 
   const choosePreset = useCallback(
@@ -282,29 +378,78 @@ export default function App() {
     [patchEdit, selectedId],
   )
 
+  // --- saved looks ------------------------------------------------------------
+  /** Like a preset: this photo's own Auto, plus the look's offsets and mix. */
+  const applyLook = useCallback(
+    (lookId: string) => {
+      const look = looks.find((l) => l.id === lookId)
+      if (!look || !selectedId) return
+      patchEdit(`look:${lookId}`, (e) => {
+        const p = photosRef.current.find((x) => x.id === selectedId)!
+        return {
+          ...e,
+          adjustments: applyPreset(p.auto.adjustments, { id: look.id, name: look.name, hint: '', delta: look.delta }),
+          levels: p.auto.levels,
+          mix: look.mix,
+        }
+      })
+      setPhotos((prev) => prev.map((p) => (p.id === selectedId ? { ...p, presetId: `look:${lookId}` } : p)))
+    },
+    [looks, patchEdit, selectedId],
+  )
+
+  const saveLook = useCallback(
+    (name: string) => {
+      const p = photosRef.current.find((x) => x.id === selectedId)
+      if (!p) return
+      const look = makeLook(name, p.edit, p.auto)
+      const next = [...looks, look]
+      setLooks(next)
+      setPhotos((prev) => prev.map((x) => (x.id === p.id ? { ...x, presetId: `look:${look.id}` } : x)))
+      if (saveLooks(next)) notify('ok', `Saved "${look.name}".`)
+      else notify('info', `Saved "${look.name}" for this visit. This browser is not letting the app keep it after you close the page.`)
+    },
+    [looks, selectedId, notify],
+  )
+
+  const deleteLook = useCallback(
+    (lookId: string) => {
+      const next = looks.filter((l) => l.id !== lookId)
+      setLooks(next)
+      saveLooks(next)
+    },
+    [looks],
+  )
+
+  // "Original" means the file as it came off the phone, so the colour mix and
+  // the areas go too. Framing stays: it is a different kind of decision.
   const resetToOriginal = useCallback(() => {
     patchEdit('preset:none', (e) => ({
       ...e,
       adjustments: { ...NEUTRAL },
       levels: { ...NEUTRAL_LEVELS },
+      mix: NEUTRAL_MIX,
+      areas: [],
     }))
     setPhotos((prev) => prev.map((p) => (p.id === selectedId ? { ...p, presetId: 'none' } : p)))
   }, [patchEdit, selectedId])
 
   /**
-   * Copies the sliders to every photo but leaves each one's own measured black
-   * and white points alone: a consistent look across the set, without forcing
-   * one photo's levels onto a differently-exposed shot. Framing stays personal
-   * to each photo, since what needs to stay in frame differs shot to shot.
+   * Copies the sliders and the colour mix to every photo but leaves each one's
+   * own measured black and white points alone: a consistent look across the
+   * set, without forcing one photo's levels onto a differently-exposed shot.
+   * Framing and areas stay personal to each photo, since what needs to stay in
+   * frame - and where the dish sits - differs shot to shot.
    */
   const applyToAll = useCallback(() => {
     if (!selected) return
     const adjustments = { ...selected.edit.adjustments }
+    const mix = selected.edit.mix ?? NEUTRAL_MIX
     const presetId = selected.presetId
     const next = photosRef.current.map((p) => {
       if (p.id === selected.id) return p
       entryFor(p.id).past.push(p.edit)
-      return { ...p, presetId, edit: { ...p.edit, adjustments } }
+      return { ...p, presetId, edit: { ...p.edit, adjustments, mix } }
     })
     photosRef.current = next
     setPhotos(next)
@@ -825,6 +970,9 @@ export default function App() {
             tool={tool}
             onTool={setTool}
             onGeometry={onGeometry}
+            selectedArea={liveArea}
+            onSelectArea={setSelectedArea}
+            onArea={onArea}
             onError={reportError}
           />
           <AdjustPanel
@@ -832,6 +980,17 @@ export default function App() {
             tool={tool}
             onTool={setTool}
             onAdjust={markCustom}
+            onMix={onMix}
+            onResetMix={onResetMix}
+            selectedArea={liveArea}
+            onSelectArea={setSelectedArea}
+            onAddArea={onAddArea}
+            onArea={onArea}
+            onRemoveArea={onRemoveArea}
+            looks={looks}
+            onApplyLook={applyLook}
+            onSaveLook={saveLook}
+            onDeleteLook={deleteLook}
             onGeometry={onGeometry}
             onResetFraming={onResetFraming}
             aiSettings={aiSettings}

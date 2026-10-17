@@ -185,9 +185,33 @@ export function fullViewSize(w: number, h: number, geo: Geometry): [number, numb
   return [(fw * ct + fh * st) * 1.06, (fw * st + fh * ct) * 1.06]
 }
 
-/** Builds the output-UV -> source-UV matrix for a given view. */
-export function transformFor(w: number, h: number, geo: Geometry, view: ViewMode = 'edit'): Mat3 {
-  const perspective = view === 'perspective' ? IDENTITY : perspectiveMatrix(geo)
+/**
+ * Output UV -> area UV: 0..1 across the photo after perspective correction,
+ * before it is turned, mirrored, straightened or cropped (see AreaAdjust).
+ * `rw`/`rh` are that rectangle's size in pixels.
+ *
+ * This is everything in `transformFor` except the perspective step, so it is
+ * affine. It is null in the perspective view, which deliberately draws the
+ * uncorrected photo and so has no rectified frame to speak of.
+ */
+export function outputToFrame(
+  w: number,
+  h: number,
+  geo: Geometry,
+  view: ViewMode = 'edit',
+): { m: Mat3; rw: number; rh: number } | null {
+  if (view === 'perspective') return null
+  const { m, fw, fh } = frameChain(w, h, geo, view)
+  const [rw, rh] = rectifiedSize(w, h, geo)
+  return {
+    m: mulAll(UNROTATE[geo.rotate90], geo.flipH ? FLIP_X : IDENTITY, scale(1 / fw, 1 / fh), m),
+    rw,
+    rh,
+  }
+}
+
+/** Output UV -> framed pixels, shared by `transformFor` and `outputToFrame`. */
+function frameChain(w: number, h: number, geo: Geometry, view: ViewMode) {
   const straighten = view === 'perspective' ? 0 : geo.straighten
 
   let fw: number
@@ -215,16 +239,20 @@ export function transformFor(w: number, h: number, geo: Geometry, view: ViewMode
   }
 
   const t = (straighten * Math.PI) / 180
+  const m = mulAll(translate(cx, cy), rotate(t), scale(cw, ch), translate(-0.5, -0.5))
+  return { m, fw, fh }
+}
 
+/** Builds the output-UV -> source-UV matrix for a given view. */
+export function transformFor(w: number, h: number, geo: Geometry, view: ViewMode = 'edit'): Mat3 {
+  const perspective = view === 'perspective' ? IDENTITY : perspectiveMatrix(geo)
+  const { m, fw, fh } = frameChain(w, h, geo, view)
   return mulAll(
     perspective,
     UNROTATE[geo.rotate90],
     geo.flipH ? FLIP_X : IDENTITY,
     scale(1 / fw, 1 / fh),
-    translate(cx, cy),
-    rotate(t),
-    scale(cw, ch),
-    translate(-0.5, -0.5),
+    m,
   )
 }
 

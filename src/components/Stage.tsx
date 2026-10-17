@@ -10,15 +10,17 @@ import {
 } from '../engine/geometry'
 import { Renderer } from '../engine/renderer'
 import { rotatedSize } from '../engine/geometry'
-import type { Geometry } from '../engine/types'
+import type { AreaAdjust, Geometry } from '../engine/types'
 import type { Photo } from '../state/photos'
+import { AreaOverlay } from './AreaOverlay'
 import { CropOverlay } from './CropOverlay'
 import { PerspectiveOverlay } from './PerspectiveOverlay'
 
-export type Tool = 'adjust' | 'crop' | 'perspective'
+export type Tool = 'adjust' | 'areas' | 'crop' | 'perspective'
 
 const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: 'adjust', label: 'Adjust', key: 'A', icon: '◐' },
+  { id: 'areas', label: 'Areas', key: 'L', icon: '◎' },
   { id: 'crop', label: 'Crop', key: 'C', icon: '⌗' },
   { id: 'perspective', label: 'Perspective', key: 'P', icon: '◧' },
 ]
@@ -28,6 +30,7 @@ const MAX_PREVIEW_EDGE = 2600
 
 const VIEW_FOR: Record<Tool, ViewMode> = {
   adjust: 'edit',
+  areas: 'edit',
   crop: 'crop',
   perspective: 'perspective',
 }
@@ -37,12 +40,18 @@ export function Stage({
   tool,
   onTool,
   onGeometry,
+  selectedArea,
+  onSelectArea,
+  onArea,
   onError,
 }: {
   photo: Photo
   tool: Tool
   onTool: (t: Tool) => void
   onGeometry: (patch: Partial<Geometry>) => void
+  selectedArea: string | null
+  onSelectArea: (id: string | null) => void
+  onArea: (id: string, patch: Partial<AreaAdjust>, key: string) => void
   onError: (message: string) => void
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
@@ -219,6 +228,7 @@ export function Stage({
       if (e.metaKey || e.ctrlKey || e.altKey) return
       const k = e.key.toLowerCase()
       if (k === 'c') onTool(tool === 'crop' ? 'adjust' : 'crop')
+      else if (k === 'l') onTool(tool === 'areas' ? 'adjust' : 'areas')
       else if (k === 'p') onTool(tool === 'perspective' ? 'adjust' : 'perspective')
       else if (k === 'a' || e.key === 'Escape') onTool('adjust')
       else if (k === '\\') setCompare((v) => !v)
@@ -267,6 +277,17 @@ export function Stage({
             <CropOverlay photo={photo} cssW={cssW} cssH={cssH} onGeometry={onGeometry} />
           )}
 
+          {tool === 'areas' && (
+            <AreaOverlay
+              photo={photo}
+              cssW={cssW}
+              cssH={cssH}
+              selectedId={selectedArea}
+              onSelect={onSelectArea}
+              onChange={onArea}
+            />
+          )}
+
           {tool === 'perspective' && (
             <PerspectiveOverlay
               photo={photo}
@@ -300,6 +321,11 @@ export function Stage({
           <p className="stage-hint">
             Drag the four corners onto something that is <b>really</b> a rectangle — the rim of
             the plate, the edge of the table, a menu. Arrow keys nudge; hold Shift to move faster.
+          </p>
+        )}
+        {tool === 'areas' && (photo.edit.areas ?? []).length === 0 && (
+          <p className="stage-hint">
+            Add a <b>circle</b> or a <b>gradient</b> in the Areas panel, then drag it here.
           </p>
         )}
         {tool === 'crop' && (

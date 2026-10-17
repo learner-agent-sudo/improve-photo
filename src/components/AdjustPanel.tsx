@@ -1,24 +1,42 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { AiSettings, ProposedChange } from '../ai/types'
 import { AiPanel } from './AiPanel'
 import { describeAuto } from '../engine/auto'
 import { aspectRatio, centredCrop, framedSize } from '../engine/geometry'
 import { RANGES } from '../engine/presets'
-import type { Adjustments, AspectKey, Geometry } from '../engine/types'
-import { FULL_RECT } from '../engine/types'
+import type { Adjustments, AreaAdjust, AspectKey, BandShift, Geometry } from '../engine/types'
+import { FULL_RECT, isNeutralMix, MIX_BANDS, NEUTRAL_MIX } from '../engine/types'
+import { AreaControls } from './AreaControls'
+import { LooksControls } from './LooksControls'
+import type { Look } from '../state/looks'
 import type { Photo } from '../state/photos'
 import { Histogram } from './Histogram'
 import { Slider } from './Slider'
 import type { Tool } from './Stage'
 
-type Tab = 'light' | 'colour' | 'detail' | 'frame'
+type Tab = 'light' | 'colour' | 'detail' | 'areas' | 'frame'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'light', label: 'Light' },
   { id: 'colour', label: 'Colour' },
   { id: 'detail', label: 'Detail' },
+  { id: 'areas', label: 'Areas' },
   { id: 'frame', label: 'Frame' },
 ]
+
+/** What each band's swatch shows. Mid-saturation, so they read on both themes. */
+const BAND_SWATCH: Record<(typeof MIX_BANDS)[number], string> = {
+  red: '#d9473d',
+  orange: '#e8892e',
+  yellow: '#e3c534',
+  green: '#4fae4a',
+  aqua: '#33b5ad',
+  blue: '#3e70d4',
+  purple: '#8a55cf',
+  magenta: '#cf4daa',
+}
+
+const BAND_NAME = (b: string) => b[0].toUpperCase() + b.slice(1)
 
 const ASPECTS: { key: AspectKey; label: string }[] = [
   { key: 'free', label: 'Free' },
@@ -35,12 +53,24 @@ const ASPECTS: { key: AspectKey; label: string }[] = [
 const ev = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(2)} EV`
 const deg = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}°`
 const pctSigned = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}`
+const hueDeg = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 30)}°`
 
 export function AdjustPanel({
   photo,
   tool,
   onTool,
   onAdjust,
+  onMix,
+  onResetMix,
+  selectedArea,
+  onSelectArea,
+  onAddArea,
+  onArea,
+  onRemoveArea,
+  looks,
+  onApplyLook,
+  onSaveLook,
+  onDeleteLook,
   onGeometry,
   onResetFraming,
   aiSettings,
@@ -54,6 +84,17 @@ export function AdjustPanel({
   tool: Tool
   onTool: (t: Tool) => void
   onAdjust: (patch: Partial<Adjustments>) => void
+  onMix: (band: number, patch: Partial<BandShift>) => void
+  onResetMix: () => void
+  selectedArea: string | null
+  onSelectArea: (id: string | null) => void
+  onAddArea: (kind: AreaAdjust['kind']) => void
+  onArea: (id: string, patch: Partial<AreaAdjust>, key: string) => void
+  onRemoveArea: (id: string) => void
+  looks: Look[]
+  onApplyLook: (id: string) => void
+  onSaveLook: (name: string) => void
+  onDeleteLook: (id: string) => void
   onGeometry: (patch: Partial<Geometry>) => void
   onResetFraming: () => void
   aiSettings: AiSettings
@@ -64,8 +105,19 @@ export function AdjustPanel({
   footer?: ReactNode
 }) {
   const [tab, setTab] = useState<Tab>('light')
+  const [band, setBand] = useState(1)
   const a = photo.edit.adjustments
   const g = photo.edit.geometry
+  const mix = photo.edit.mix ?? NEUTRAL_MIX
+  const shift = mix[band] ?? NEUTRAL_MIX[band]
+
+  // The Areas tab and the Areas tool are one thing seen from two places: the
+  // handles only make sense with the controls, and the controls only with the
+  // handles. Whichever one changes, the other follows.
+  useEffect(() => {
+    if (tool === 'areas') setTab('areas')
+    else setTab((t) => (t === 'areas' ? 'light' : t))
+  }, [tool])
 
   const bind = (key: keyof Adjustments, label: string, display?: (v: number) => string) => {
     const [min, max] = RANGES[key]
@@ -101,8 +153,12 @@ export function AdjustPanel({
             role="tab"
             aria-selected={tab === t.id}
             onClick={() => {
+              // Closed: open on this tab. Open: switch tabs, and only a second
+              // tap on the tab already showing puts the sheet away.
+              if (collapsed || tab === t.id) onExpand?.()
               setTab(t.id)
-              onExpand?.()
+              if (t.id === 'areas') onTool('areas')
+              else if (tool === 'areas') onTool('adjust')
             }}
           >
             {t.label}
@@ -120,6 +176,13 @@ export function AdjustPanel({
       <div className="panel-body">
         {tab === 'light' && (
           <>
+            <LooksControls
+              looks={looks}
+              activeId={photo.presetId}
+              onApply={onApplyLook}
+              onSave={onSaveLook}
+              onDelete={onDeleteLook}
+            />
             <Histogram bins={photo.analysis.histogram} />
             <p className="auto-notes">
               <b>Auto read this photo as:</b>
@@ -162,7 +225,80 @@ export function AdjustPanel({
               <b>Vibrance</b> lifts the colours that are still dull and mostly leaves the ones that
               are already strong. On food it is almost always the better of the two.
             </p>
+
+            <div className="group">
+              <h3 className="group-title">Colour mix</h3>
+              <div className="mix-swatches" role="radiogroup" aria-label="Colour to change">
+                {MIX_BANDS.map((b, i) => {
+                  const m = mix[i]
+                  const touched = !!m && (m.hue !== 0 || m.sat !== 0 || m.lum !== 0)
+                  return (
+                    <button
+                      key={b}
+                      role="radio"
+                      aria-checked={band === i}
+                      aria-label={BAND_NAME(b)}
+                      title={BAND_NAME(b)}
+                      className={`mix-swatch${touched ? ' touched' : ''}`}
+                      style={{ ['--sw' as string]: BAND_SWATCH[b] }}
+                      onClick={() => setBand(i)}
+                    />
+                  )
+                })}
+              </div>
+              <Slider
+                label={`${BAND_NAME(MIX_BANDS[band])} · hue`}
+                value={shift.hue}
+                min={-1}
+                max={1}
+                display={hueDeg}
+                onChange={(v) => onMix(band, { hue: v })}
+                onReset={() => onMix(band, { hue: 0 })}
+              />
+              <Slider
+                label={`${BAND_NAME(MIX_BANDS[band])} · saturation`}
+                value={shift.sat}
+                min={-1}
+                max={1}
+                display={pctSigned}
+                onChange={(v) => onMix(band, { sat: v })}
+                onReset={() => onMix(band, { sat: 0 })}
+              />
+              <Slider
+                label={`${BAND_NAME(MIX_BANDS[band])} · brightness`}
+                value={shift.lum}
+                min={-1}
+                max={1}
+                display={pctSigned}
+                onChange={(v) => onMix(band, { lum: v })}
+                onReset={() => onMix(band, { lum: 0 })}
+              />
+              <button
+                className="btn btn-sm"
+                style={{ width: '100%' }}
+                disabled={isNeutralMix(mix)}
+                onClick={onResetMix}
+              >
+                Reset colour mix
+              </button>
+            </div>
+            <p className="auto-notes">
+              One colour at a time. Pull <b>orange</b> brightness down for a tungsten-lit plate,
+              push <b>green</b> saturation for herbs, or take <b>yellow</b> toward orange for
+              richer bread and fried food. Whites and greys are left alone.
+            </p>
           </>
+        )}
+
+        {tab === 'areas' && (
+          <AreaControls
+            areas={photo.edit.areas ?? []}
+            selectedId={selectedArea}
+            onSelect={onSelectArea}
+            onAdd={onAddArea}
+            onChange={onArea}
+            onRemove={onRemoveArea}
+          />
         )}
 
         {tab === 'detail' && (
